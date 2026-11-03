@@ -2,7 +2,7 @@
 # sphynx - build HPN-SSH from source and package it for target operating systems.
 set -euo pipefail
 
-SPHYNX_VERSION="0.1.2"
+SPHYNX_VERSION="0.3.3"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -192,6 +192,10 @@ build_ubuntu() {
     log "Adding systemd unit, PAM service and maintainer scripts"
     install -Dm644 "$ROOT_DIR/packaging/ubuntu/hpnsshd.service" "$root/lib/systemd/system/hpnsshd.service"
     install -Dm644 "$ROOT_DIR/packaging/ubuntu/hpnsshd.pam" "$root/etc/pam.d/hpnsshd"
+    # An example only: it goes under /usr/share/doc so installing the package
+    # never changes system-wide TCP settings. The administrator opts in.
+    install -Dm644 "$ROOT_DIR/packaging/ubuntu/99-hpn-ssh-tcp.conf" \
+        "$root/usr/share/doc/hpn-ssh/examples/99-hpn-ssh-tcp.conf"
     install -dm755 "$root/DEBIAN"
     for f in postinst prerm postrm; do
         install -m755 "$ROOT_DIR/packaging/ubuntu/$f" "$root/DEBIAN/$f"

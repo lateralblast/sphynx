@@ -56,10 +56,44 @@ pass "--jobs must be positive"
 # --- lint -----------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck sphynx tests/run-tests.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
+    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
     pass "shellcheck is clean"
 else
     echo "skip - shellcheck not installed"
+fi
+
+# --- tools/perf ------------------------------------------------------------
+
+# parse it without writing a .pyc file next to the source
+python3 -B -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' tools/perf/analyze.py \
+    || fail "tools/perf/analyze.py does not parse"
+mkdir -p "$TEST_DIR"
+cat >"$TEST_DIR/perf-fixture.csv" <<CSV
+impl,cipher,cond,run,mb,elapsed,user,sys
+base,handshake,lan,1,0,1.0,0.0,0.0
+hpn,handshake,lan,1,0,1.0,0.0,0.0
+base,default,lan,1,100,2.0,0.5,0.5
+hpn,default,lan,1,100,1.5,0.5,0.5
+base,handshake,wan50,1,0,2.0,0.0,0.0
+hpn,handshake,wan50,1,0,2.0,0.0,0.0
+base,aes256-ctr,wan50,1,100,12.0,0.5,0.5
+hpn,aes256-ctr,wan50,1,100,7.0,0.5,0.5
+CSV
+perf_out="$(python3 -B tools/perf/analyze.py "$TEST_DIR/perf-fixture.csv")"
+grep -q '^LAN (no shaping)' <<<"$perf_out" || fail "perf analysis: no LAN heading"
+grep -q '^50 ms round trip' <<<"$perf_out" || fail "perf analysis: no 50 ms heading"
+grep -q ' 2.00x' <<<"$perf_out" || fail "perf analysis: LAN ratio should be 2.00x"
+grep -q ' 2.00x' <<<"$(grep aes256-ctr <<<"$perf_out")" || fail "perf analysis: 50 ms ratio should be 2.00x"
+pass "tools/perf/analyze.py reports medians, ratios and condition headings"
+
+# --- tools/tune-tcp.sh -------------------------------------------------------
+
+mkdir -p "$TEST_DIR"
+if tests/tune-tcp.sh >"$TEST_DIR/tune-tcp.out" 2>&1; then
+    pass "tools/tune-tcp.sh tests pass ($(grep -c '^ok' "$TEST_DIR/tune-tcp.out") checks)"
+else
+    cat "$TEST_DIR/tune-tcp.out" >&2
+    fail "tools/tune-tcp.sh tests"
 fi
 
 # --- end-to-end build -----------------------------------------------------
@@ -107,6 +141,12 @@ case "$banner" in
     *) fail "hpnssh -V does not report sphynx $script_version: $banner" ;;
 esac
 
+grep -q ' \./usr/share/doc/hpn-ssh/examples/99-hpn-ssh-tcp.conf$' <<<"$contents" || fail "package is missing the TCP buffer example"
+if grep -q 'etc/sysctl\.d' <<<"$contents"; then
+    fail "package must not install system-wide TCP settings"
+fi
+pass "package ships the TCP buffer example under /usr/share/doc and does not apply it"
+
 if grep -q 'ssh_host_' <<<"$contents"; then
     fail "package must not contain host keys"
 fi
@@ -132,5 +172,26 @@ ctl="$TEST_DIR/control"
 dpkg-deb -e "$deb" "$ctl"
 grep -qx '/etc/hpnssh/sshd_config' "$ctl/conffiles" || fail "sshd_config is not a conffile"
 pass "config files are marked as conffiles"
+
+# --- regression tests that run against the build tree ---------------------
+
+tree="$TEST_DIR/build/ubuntu/src"
+
+for t in chachapoly_mt_bounds patch_list; do
+    tests/build-c-test.sh "$tree" "tests/c/$t.c" "$TEST_DIR/$t" >"$TEST_DIR/$t.build" 2>&1 \
+        || { tail -n 20 "$TEST_DIR/$t.build" >&2; fail "could not build tests/c/$t.c"; }
+    "$TEST_DIR/$t" >"$TEST_DIR/$t.out" 2>&1 \
+        || { cat "$TEST_DIR/$t.out" >&2; fail "tests/c/$t.c"; }
+    pass "tests/c/$t.c passes"
+done
+
+if [ "$("$tree/hpnssh" -G -T -oNoneSwitch=yes -oNoneEnabled=yes localhost | grep -c '^noneswitch yes$')" != 1 ]; then
+    fail "ssh -T must not turn off NoneSwitch"
+fi
+pass "ssh -T leaves NoneSwitch alone"
+
+tests/scp-resume.sh "$tree/hpnscp" "$TEST_DIR/scp-resume" >"$TEST_DIR/scp-resume.out" 2>&1 \
+    || { cat "$TEST_DIR/scp-resume.out" >&2; fail "scp -Z resume tests"; }
+pass "scp -Z resume tests pass ($(grep -c '^ok' "$TEST_DIR/scp-resume.out") checks)"
 
 echo "$PASSED checks passed"

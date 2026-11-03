@@ -4,6 +4,8 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done.
 
 ## Open
 
+- [ ] sphynx-ssh: the HPN-SSH client sometimes uses far more CPU than OpenSSH on long paths, and which it does varies between identical runs. With the default 4 MB send buffer limit it spent about a full core for the whole transfer in 19 of 24 runs (about 19 CPU-seconds per GB at 50 ms, 37 at 100 ms), 2 to 3 in 4 runs (the same as OpenSSH's 1.8 to 2.0), and 13.5 once. With the limit lifted it was steady at 7 to 9. A 96 MB transfer made about 85,000 `ppoll` calls against about 4,600 for OpenSSH. A profile shows the time in the polling path (`memmove`, `poll`, `channel_prepare_poll`, `channel_handle_rfd`), not in the ciphers. Find out why the client loop wakes so often, what decides whether it does, and whether it can batch work.
+- [ ] sphynx: extend the performance comparison to scp and sftp transfers, an HPN-SSH client against an OpenSSH server and the reverse, different `SSH_CIPHER_THREADS` values, and packet loss and jitter (`netem loss`, `netem jitter`).
 - [ ] Install the built `.deb` on a clean Ubuntu VM or container and test install, upgrade, remove and purge, including the `hpnsshd` service and key generation.
 - [ ] Run `lintian` on the built `.deb` and fix what it reports.
 - [ ] Add a Debian target (`--target debian`).
@@ -15,7 +17,7 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done.
 
 Bugs, most serious first. The OpenSSL 3 build (the Ubuntu build) uses `cipher-ctr-mt-functions.c`. `cipher-ctr-mt.c` is only built without OpenSSL 3, but it has the same bugs, so fix both.
 
-Items marked `[x]` are committed on branch `fix/aes-ctr-mt-threading` in `sphynx-ssh/`, with one version per fix (see CHANGELOG.md).
+Items marked `[x]` in the sphynx-ssh review are committed on branch `fix/aes-ctr-mt-threading` in `sphynx-ssh/`, with one version per fix (see CHANGELOG.md). The CI items are on `chore/ci-cleanup` and are not yet committed.
 
 - [ ] sphynx-ssh: the non-OpenSSL-3 build does not compile against this system's OpenSSL 3 headers: `cipher-chachapoly-libcrypto-mt.c:575-584` uses OpenSSL 1.1 struct members. That path is meant for OpenSSL 1.1 and LibreSSL, so it needs a test environment with those libraries before it can be checked.
 - [ ] sphynx-ssh: the non-OpenSSL-3 cipher (`cipher-ctr-mt.c`) is compile-checked with zero warnings after the fixes, but it has not been run. Test it against OpenSSL 1.1 or LibreSSL.
@@ -25,19 +27,71 @@ Items marked `[x]` are committed on branch `fix/aes-ctr-mt-threading` in `sphynx
 - [ ] sphynx-ssh: confirm the `strcpy` calls into `buf` in `binn.c:3503,3505` fit the buffer.
 - [ ] sphynx-ssh: a full review of the HPN-only changes is still open. I did not read `scp.c` (+753 lines), `clientloop.c` (+299), `packet.c`, `kex.c`, `channels.c` or `sshconnect.c` in depth.
 
-CI and repository hygiene (inherited from OpenSSH):
 
-- [ ] sphynx-ssh: `c-cpp.yml` and `vm.yml` trigger on `master`, `dev_major`, `dev_minor` and `DynamicWindow`. Keep only the branches the fork uses.
-- [ ] sphynx-ssh: `github-repo-stats.yml` runs daily and needs the secret `ghrs_github_api_token`, which the fork does not have. Remove it or configure the secret.
-- [ ] sphynx-ssh: `cifuzz.yml` builds OSS-Fuzz's `openssh` project, which will not work for the fork. Remove it or retarget it.
-- [ ] sphynx-ssh: `selfhosted.yml` and `upstream.yml` only run for `openssh/*` repositories. Remove them to avoid confusion.
-- [ ] sphynx-ssh: no workflow sets `permissions:`, so the token has the default scope. Add `permissions: contents: read` at the top level and raise it per job only where needed.
-- [ ] sphynx-ssh: pin third-party actions to full commit SHAs. `github-repo-stats` uses `@RELEASE` and the `vmactions/*` actions use `# v1`. The `# main` comments on the SHA pins are misleading.
-- [ ] sphynx-ssh: `README.md` and `.github/ci-status.md` still describe upstream OpenSSH and its badges. Rewrite them for the fork.
-- [ ] sphynx-ssh: run `make tests` (the `regress/` suite) on the fork and record the result, since the fork's CI does not clearly run HPN-specific tests.
+### sphynx-ssh review, round 2 (HPN-only code outside the cipher fixes)
+
+Four reviewers read the HPN delta in `scp.c`, the client and server loops, the packet and key exchange layer, and the HPN-only files. The reviewers built and ran nothing. The ten items I re-checked and fixed (0.2.1 to 0.3.0) are in Done. The items below are as reported by a reviewer and need confirming, ideally with a failing test, before the fix.
+
+Client and server loops (reported):
+
+- [ ] sphynx-ssh: `clientloop.c:2713-2800`: the metrics reply from the server is parsed with no length check. `blob` is uninitialised, the `sshpkt_get_string_direct` result is ignored, and the binn parser is given no size, so a malicious server can drive reads past the packet buffer. Use `binn_load_ex(blob, len, ...)` and fail on error.
+- [ ] sphynx-ssh: `clientloop.c:2790-2840` and `metrics.c:255-258`: the metrics object is never `binn_free`d, leaking a buffer on every poll (default 5 s). `localfptr` leaks on one error path, and an unwritable `MetricsPath` calls `fatal()` and ends the session. `metricsstring` comes from an unzeroed `malloc(1024)` that can be printed uninitialised when the object is NULL.
+- [ ] sphynx-ssh: `sshconnect2.c:489-520`: the post-auth none-switch rekey calls `kex_proposal_populate_entries` with no `KexAlgorithms`, so the user's setting is dropped and the built-in list is used. With NoneMac the function runs twice on the same proposal and leaks the first set of strings.
+- [ ] sphynx-ssh: `ssh.c:1722-1745`: if `FallbackPort` equals `default_ssh_port()` and the connect fails, the `tryagain` loop never ends. Each pass also leaks the resolved addresses.
+- [ ] sphynx-ssh: `clientloop.c:1580-1690`: signal blocking was moved out of the poll region, so children started from the loop (the `~C` `!cmd` handler, the xauth `popen`) inherit blocked HUP, INT, QUIT and TERM.
+- [ ] sphynx-ssh: `serverloop.c:397-405`: `sshpkt_final_log_entry` is called twice, so every session logs the throughput line twice. It also divides by zero when `total_time` is 0.
+
+Key exchange, packet and config (reported):
+
+- [ ] sphynx-ssh: `kex.c:1183-1195`, `mac.c:66`: the "none" MAC is only checked when the cipher is also "none". With `NoneMacEnabled`, a client that lists `none` in `MACs`, or a server with `MACs none`, can negotiate a real cipher with no integrity check before authentication. A man in the middle cannot force it, since the proposals are covered by the signed exchange hash. Reject MAC "none" unless the cipher is also "none" and the session is post-auth.
+- [ ] sphynx-ssh: `kex.c:1190-1193`, `packet.c:1057`: `ssh->none_mac` is connection-wide and never cleared. A none/none result in one direction disables the MAC in both, and it stays disabled after a rekey back to a real cipher.
+- [ ] sphynx-ssh: `readconf.c:1403-1406`: `oMetricsPath` sets `options->metrics = 1` before the `*activep` check, bypassing first-value-wins. A `MetricsPath` inside a non-matching `Host` block turns metrics on for every connection and overrides `Metrics no`.
+- [ ] sphynx-ssh: `DisableMTAES` only guards AES-CTR (`cipher-switch.c:65`). On the server, any post-auth rekey promotes to MT ChaCha (`kex.c:1141`, `packet.c:1064`) regardless of the setting.
+- [ ] sphynx-ssh: `readconf.c`: `MetricsInterval` and `FallbackPort` are parsed without bounds. An interval of 0 or less sends a metrics request on every loop iteration, and a port outside 1 to 65535 goes straight to `resolve_host`. Also `packet.c:1070` returns a stale `r` (possibly 0) with `*ccp` NULL, though that path is unreachable today.
+- [ ] sphynx-ssh: leaks: `kex.c:~1141` discards the string returned by `match_list` on every kex, `cipher.c:384-420` never releases the provider and `EVP_CIPHER_fetch` results on each init, and `cipher-chachapoly-libcrypto.c:68-72` never frees its `EVP_MAC_fetch` result.
+
+HPN-only files (reported):
+
+- [ ] sphynx-ssh: `cipher-chachapoly-libcrypto-mt.c:277-286,557-562`: fork handling is unsafe because the `SAFETY` guards are never defined. After a fork post-auth (`-f`, ControlPersist), the child can `pthread_join` a thread id from the parent, and `chachapoly_free_mt` can free the context while manager threads still use it. Also on a `pthread_create` failure (`648-653`) the crypt has already advanced `seqnr` and the slot is not reset. That one is benign on glibc.
+- [ ] sphynx-ssh: `happyeyeballs.c:179,191`: `fd_ai[]` is an uninitialised array, and `happy_eyeballs_process` reads `fd_ai[sock]->ai_family` for every fd below `nfds` before testing `FD_ISSET`. A gap in fd numbers makes it dereference garbage. Several failure paths also set `errno = 0`.
+
+- [ ] sphynx-ssh: the `scp -Z` concat error paths (0.2.7) have no automated test. They need a write or disk-full failure to be injected into the receiver.
+- [ ] sphynx-ssh: the `scp` to `hpnscp` use after free (0.2.2) was checked by hand: an AddressSanitizer control master dies on the old client and survives on the fixed one. Automate it. It needs a running server and an ASan build, so it cannot go in `tests/run-tests.sh` as it stands.
+
+Not yet reviewed:
+
+- [ ] sphynx-ssh: not read by any reviewer: the OpenSSL 1.1 poly1305 `EVP_PKEY` path in the ChaCha code (`md_ctx` reuse after `DigestSignFinal` looks suspect), the binn library's validation of remote blobs, `servconf.c` `assemble_algorithms`, `Match` block handling of `NoneEnabled`, `cipher-switch.c` use across multiple sessions on one connection, `sshd-auth.c`, and the rest of `sshconnect.c`'s `happy_eyeballs` caller.
+- [ ] sphynx-ssh: add a regression test for each fix above, written to fail first. Most need a harness that does not exist yet: a malicious-peer test for the metrics reply and the large-packet ChaCha case, an `scp -Z` resume matrix, and a `Ciphers` ordering test for `patch_list`.
 
 ## Done
 
+- [x] sphynx: `tools/tune-tcp.sh` applies and reverts the TCP buffer tuning, documented in the README under "Using the script" (0.3.3).
+- [x] sphynx: moved the performance harness into the repository as `tools/perf/` (`perf.sh`, `build-baseline.sh`, `analyze.py`), with paths relative to the repository and results in the git-ignored `build/perf/` (0.3.2).
+- [x] sphynx: documented the TCP send buffer limit and ship an opt-in example, `/usr/share/doc/hpn-ssh/examples/99-hpn-ssh-tcp.conf` (0.3.1). The package does not apply it.
+- [x] sphynx: performance comparison of OpenSSH 10.6 against HPN-SSH 0.3.0 over a LAN, 50 ms and 100 ms paths at 1 Gbit/s, four ciphers, median of 3 runs. HPN-SSH is 1.2 to 1.8 times faster on the LAN. On long paths both are held back by a 4 MB kernel send buffer limit (38 against 50 MB/s at 50 ms, 19 against 25 MB/s at 100 ms). With a 32 MB limit HPN-SSH reaches 107 and 99 MB/s, 2.8 and 5 times OpenSSH, which stays at its 2 MB window limit. Verification only, no version.
+- [x] sphynx: regression tests for the round 2 fixes, in `tests/`: `tests/c/chachapoly_mt_bounds.c`, `tests/c/patch_list.c`, `tests/scp-resume.sh` (a sender and a sink wired together with a coprocess, no server needed) and a `-T` check, all run by `tests/run-tests.sh`. On the pre-fix code the ChaCha test fails 3 of 4 cases, `patch_list` 2 of 7, and `scp-resume.sh` 3 of 8; on the fixed code all pass. Verification only, no version.
+- [x] sphynx-ssh: `scp.c:2307,2315,2325` and the `bad:` paths: `np_tmp` is not freed when `open` or `allocbuf` fails, so the next file can reuse or overwrite the stale name. `npstat` is only partly initialised when `stat` fails, and its uninitialised `st_mode` is sent to the peer in the `R%04o` record. (0.3.0)
+- [x] sphynx-ssh: `scp.c:1363-1405,2132-2140`: the hash field is parsed with a fixed width and no length check. A shorter line makes the sink read past the NUL into stale buffer data. If `calculate_hash` cannot open the file it sends an empty hash. If `EVP_get_digestbyname("blake2b512")` returns NULL, `md_len` is used uninitialised. (0.2.9)
+- [x] sphynx-ssh: `scp.c:1598,1616-1664`: the sender trusts remote data. The `atomicio` read of the 191-byte header is unchecked, `inbuf` is uninitialised, and the size and hash checks only print and continue. A remote `insize` larger than the local file makes `xfer_size` negative. (0.2.8)
+- [x] sphynx-ssh: `scp.c:2490-2540` (resume concat): a failed `fopen`, `fstat`, `fwrite` or `fclose` jumps to the cleanup, which deletes the temp file holding the new data. No error is reported, so the transfer shows success and leaves a truncated destination. The `fread` loop has no EOF or error check and can spin forever. (0.2.7)
+- [x] sphynx-ssh: `scp.c:1522,1626-1675`: the sender's `match` is set once per `source()` call and only reassigned to `"M"` or `"F"` (I confirmed the three assignment sites). A later file in the same transfer reuses the previous file's value, so the sink and sender disagree about whether file data follows, and the protocol desynchronises. (0.2.6)
+- [x] sphynx-ssh: `cipher-chachapoly-libcrypto-mt.c:610` and `606-608`: `fastXOR2(dest+aadlen, src+aadlen, ks->mainStream, len)` has no bound on `len`. `mainStream` is about 32 KB (`KEYSTREAMLEN`), but the receive path accepts packets up to `packet_max_size` = 256 KiB. After authentication, a valid large packet reads past the keystream into neighbouring structs, giving wrong plaintext or a crash on the last stream. `aadlen` is also unchecked against `headerStream`. (0.2.5)
+- [x] sphynx-ssh: `ssh.c:1042`: `-T` sets `none_switch = 0`, but the none cipher is only allowed when no tty is allocated (`sshconnect2.c`). `ssh -T -oNoneSwitch=yes` therefore always disables it. The comment says the intent was the interactive case, so the check looks inverted. (0.2.4)
+- [x] sphynx-ssh: `kex.c:813-846` `patch_list`: `match_list(ccpmtstr, orig, &next)` returns `next` as an offset into its first argument (the 31-character MT cipher name), not into `orig`. If the MT ChaCha cipher is not first in a user's `Ciphers` list, the serial cipher name is spliced in at byte 31 of the wrong string, and the KEXINIT proposal is corrupted. The default list has it first, so the default works. (0.2.3)
+- [x] sphynx-ssh: `clientloop.c:3015-3019`, the `scp` to `hpnscp` rewrite: `sshbuf_free(cmd); cmd = sshbuf_new();` frees the caller's buffer and replaces only the local pointer. The caller (`ssh.c` global `command`, or `mux.c` `cctx->cmd`) is left with a dangling pointer, and the mux path frees it again. The `malloc(len+4)` is unchecked, and `sprintf("%s", sshbuf_ptr(cmd))` assumes the buffer is NUL-terminated, which an `sshbuf` does not guarantee. Reset and refill the existing buffer instead. (0.2.2)
+- [x] sphynx-ssh: `scp.c:2186,2319` in `-Z` resume mode: when the destination is a plain file, `np = targ` is the caller's argument string, and `strcat(np, rand_string)` appends 9 bytes to it with no size check. The directory case has 250 bytes of slack and is safe. Use a separate allocated buffer. The temp name also comes from `srand(time(NULL))` and is opened without `O_EXCL`. (0.2.1)
+- [x] sphynx-ssh: ran `make tests` (the `regress/` suite) on the fixed code and recorded the result: all tests passed, exit 0, 87 passing checks (0.2.0).
+- [x] sphynx-ssh: CI cleanup, one version per item (0.1.3 to 0.1.9). On branch `chore/ci-cleanup` in `sphynx-ssh/`, separate from the cipher fixes, not yet committed.
+- [x] sphynx: version scheme. `SSH_SPHYNX` in `sphynx-ssh/version.h` makes `hpnssh -V` and the SSH banner report `OpenSSH_10.6p1_hpn18.12.0_sphynx<version>`. `sphynx build` refuses to build if the tag does not match, and the `.deb` version includes `+sphynx<version>` (0.0.3).
+- [x] sphynx: `sphynx build` uses `sphynx-ssh/` as the default source instead of `hpn-ssh/` (0.0.2).
+- [x] sphynx-ssh: verified the cipher fixes. ThreadSanitizer reports 20 races on the original code and none on the fixed code, under 2 threads, and 4 threads with repeated connections. A 256 MB transfer in both directions with 1, 2, 4 and 8 threads and forced rekeys matches its SHA-256. 40 short connections all succeed. Verification only, no version.
+- [x] sphynx-ssh: `README.md` and `.github/ci-status.md` still describe upstream OpenSSH and its badges. Rewrite them for the fork. (0.1.9)
+- [x] sphynx-ssh: pin third-party actions to full commit SHAs. `github-repo-stats` uses `@RELEASE` and the `vmactions/*` actions use `# v1`. The `# main` comments on the SHA pins are misleading. (0.1.8)
+- [x] sphynx-ssh: no workflow sets `permissions:`, so the token has the default scope. Add `permissions: contents: read` at the top level and raise it per job only where needed. (0.1.7)
+- [x] sphynx-ssh: `selfhosted.yml` and `upstream.yml` only run for `openssh/*` repositories. Remove them to avoid confusion. (0.1.6)
+- [x] sphynx-ssh: `cifuzz.yml` builds OSS-Fuzz's `openssh` project, which will not work for the fork. Remove it or retarget it. (0.1.5)
+- [x] sphynx-ssh: `github-repo-stats.yml` runs daily and needs the secret `ghrs_github_api_token`, which the fork does not have. Remove it or configure the secret. (0.1.4)
+- [x] sphynx-ssh: `c-cpp.yml` and `vm.yml` trigger on `master`, `dev_major`, `dev_minor` and `DynamicWindow`. Keep only the branches the fork uses. (0.1.3)
 - [x] sphynx-ssh: `pthread_attr_init` was never paired with `pthread_attr_destroy`. Fixed in both files. (0.1.2)
 - [x] sphynx-ssh: unchecked `malloc` of the worker argument array in `cipher-chachapoly-libcrypto-mt.c`, which was then dereferenced. Fixed: the NULL case reports failure through `retval`. (0.1.1)
 - [x] sphynx-ssh: `cipher-ctr-mt.c` called `exit(1)` from a worker thread on an invalid key length. Fixed: the key length is validated in init before any thread starts, and failures use `fatal()`. (0.1.0)

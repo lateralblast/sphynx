@@ -4,6 +4,139 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-03
+
+### Added
+
+- `tools/tune-tcp.sh` applies the TCP buffer tuning described in the README. `show` prints what would change and needs no privileges, `apply` sets the new maximums until the next reboot, `persist` also writes `/etc/sysctl.d/99-hpn-ssh-tcp.conf` and records the old values, and `revert` puts them back. With `--bandwidth` and `--rtt` it sizes the maximum from the path (2.5 times the bandwidth-delay product). It only raises a maximum, never lowers one, asks for confirmation unless you pass `--yes`, and refuses to run without a terminal otherwise.
+- `tests/tune-tcp.sh` tests it. The checks that change settings run inside a throwaway network namespace and are skipped without passwordless `sudo`.
+
+## [0.3.2] - 2026-11-03
+
+### Added
+
+- `tools/perf/`, a performance comparison of OpenSSH and HPN-SSH. `perf.sh setup` builds two network namespaces joined by a virtual link and starts both servers, `perf.sh run` times transfers under `tc netem` delay and a rate limit and writes a CSV, `perf.sh analyze` summarises it, and `perf.sh teardown` removes everything. `build-baseline.sh` builds vanilla OpenSSH from `openssh-portable/` as the baseline. Nothing is changed on the host's own network or kernel settings. See `tools/perf/README.md`.
+
+### Changed
+
+- The `README.md` performance table shows the range of the HPN-SSH client's CPU use where runs differ. It showed only the median, which hid that the client sometimes uses about a full core and sometimes 2 to 3 CPU-seconds per GB for the same transfer.
+- `tests/run-tests.sh` checks `tools/perf` with shellcheck and tests the analysis script against a small fixture.
+
+## [0.3.1] - 2026-11-03
+
+### Added
+
+- The package installs `/usr/share/doc/hpn-ssh/examples/99-hpn-ssh-tcp.conf`, an example that raises the maximum TCP send buffer (`net.ipv4.tcp_wmem`) to 32 MB. It is not enabled: the package never changes system-wide TCP settings, and you copy the file to `/etc/sysctl.d/` yourself to use it.
+- `README.md` has a section, "TCP buffers on long, fast paths", that explains why the send buffer limit caps HPN-SSH on long paths, how to enable the example, and measured throughput against OpenSSH 10.6.
+
+## [0.3.0] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `scp -Z` resume (`scp.c`): per-file resume state is released at the top of every loop pass, so an early `continue` or an error no longer leaves a stale temporary name for the next file to reuse or overwrite. `npstat` is zeroed before `stat()`, so the mode sent to the peer is no longer uninitialised stack data. The unused `stat(cp, &cpstat)` call is removed.
+
+## [0.2.9] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `scp -Z` resume (`scp.c`): the hash field is checked for its full length before it is read, so a short line can no longer make the receiver read past the end of the record. `calculate_hash` always produces a fixed-width field: it returns 128 `0` characters on any failure (file not readable, digest unavailable, file shorter than requested) instead of an empty or one-space value or uninitialised data. `BUF_AND_HASH` is parenthesised.
+
+## [0.2.8] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `scp -Z` resume (`scp.c`): the sender now checks what the remote sends back. It checks that the 191-byte resume response was read completely (and shows the remote's error message if that is what arrived), checks every field, and treats a remote size larger than the local file as a mismatch instead of computing a negative transfer size. The receiver treats an unexpected `F` match status as a protocol error instead of skipping the file's data.
+
+## [0.2.7] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `scp -Z` resume (`scp.c`): joining the received tail onto the existing file now reports its errors. A failed open, read, write or close is noted and sent to the sender instead of leaving a truncated destination reported as success, and the existing file is restored to its original length. The copy loop ends at end of file instead of spinning forever, and a tail that was not fully written is no longer appended.
+
+## [0.2.6] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `scp -Z` resume (`scp.c`): the sender's match status was set once per `source()` call and never reset, so a later file in the same transfer could send an earlier file's `M` or `F`, which desynchronised the protocol. It is reset for every file.
+
+## [0.2.5] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` ChaCha20-Poly1305 MT cipher (`cipher-chachapoly-libcrypto-mt.c`): a packet longer than the pregenerated keystream (about 32 KB) or an additional-data length over 64 bytes now returns `SSH_ERR_INVALID_ARGUMENT` before any keystream is read. Previously the XOR read past `mainStream` into neighbouring state, which gave wrong plaintext or could crash.
+
+## [0.2.4] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `ssh.c`: `ssh -T` no longer disables the none cipher switch. The none cipher is only allowed on sessions without a tty, which is what `-T` asks for, so `ssh -T -oNoneSwitch=yes` always lost it. The disable now applies to `-t`, the interactive case the comment described.
+
+## [0.2.3] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `kex.c`: `patch_list` inserted the serial ChaCha cipher name at an offset taken from the wrong string, so a `Ciphers` list where `chacha20-poly1305-mt@hpnssh.org` was not first produced a corrupted proposal. It now finds the MT cipher as a whole entry and inserts the serial name straight after it.
+
+## [0.2.2] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `clientloop.c`: rewriting `scp` to `hpnscp` freed the caller's command buffer and replaced only its own pointer, leaving the caller with a dangling pointer (a double free on the mux path). The buffer is now edited in place. The command is copied with `sshbuf_dup_string`, so it is always NUL-terminated, and the unchecked `malloc` and `sprintf` are gone.
+
+## [0.2.1] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `scp -Z` resume (`scp.c`): when the destination was a plain file, the temporary name was built by `strcat` onto the caller's argument string, which has no room for it (a buffer overflow), and the suffix stayed on the destination name for the rest of the transfer. The temporary name is now built in its own allocated buffer, created with `O_EXCL`, and generated with `arc4random_uniform` instead of `rand()` seeded from the clock.
+
+## [0.2.0] - 2026-11-03
+
+### Changed
+
+- `sphynx-ssh` regression suite (`make tests`) was run on the fixed code and passed: all tests passed, exit 0, 87 passing checks. The result is recorded in `TODO.md`. The run used the build from before the CI cleanup versions, so the compiled code is the same as 0.1.2.
+
+## [0.1.9] - 2026-11-03
+
+### Changed
+
+- `sphynx-ssh` README: a fork note at the top explains that the repository is sphynx-ssh, names the version string format, and says which workflows run on which branches. `.github/ci-status.md`, which held upstream OpenSSH badges, is removed.
+
+## [0.1.8] - 2026-11-03
+
+### Changed
+
+- `sphynx-ssh` workflows: the `# main` and `# v1` labels on pinned actions in `c-cpp.yml` and `vm.yml` are replaced with the release tag each SHA was resolved to (for example `# v7.0.0` for `actions/checkout`). Two SHAs have no release tag and are labelled as such. The SHAs themselves are unchanged.
+
+## [0.1.7] - 2026-11-03
+
+### Changed
+
+- `sphynx-ssh` workflows `c-cpp.yml` and `vm.yml` set `permissions: contents: read` at the top level, so the workflow token has read-only access by default.
+
+## [0.1.6] - 2026-11-03
+
+### Removed
+
+- `sphynx-ssh` workflows `selfhosted.yml` and `upstream.yml`, which only ran for `openssh/*` repositories.
+
+## [0.1.5] - 2026-11-03
+
+### Removed
+
+- `sphynx-ssh` workflow `cifuzz.yml`, which built OSS-Fuzz's `openssh` project and would not work for the fork.
+
+## [0.1.4] - 2026-11-03
+
+### Removed
+
+- `sphynx-ssh` workflow `github-repo-stats.yml`, which ran daily and needed a secret the fork does not have.
+
+## [0.1.3] - 2026-11-03
+
+### Changed
+
+- `sphynx-ssh` workflow `c-cpp.yml` runs on pushes and pull requests to `master` only. Previously it also ran on `dev_major`, `dev_minor` and `DynamicWindow`, which do not exist in the fork.
+
 ## [0.1.2] - 2026-11-03
 
 ### Fixed
