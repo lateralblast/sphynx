@@ -38,11 +38,11 @@ tools/perf/perf.sh teardown
 | `--ciphers LIST` | `default`, `chacha20-poly1305@openssh.com`, `aes256-ctr`, `aes256-gcm@openssh.com` | Comma list. `default` is each side's own default cipher. |
 | `--runs N` | 3 | Runs per case. The two implementations alternate within each run. |
 | `--mb LIST` | `lan=2048,wan50=512,wan100=384` | Data size in MB, as `cond=MB` pairs. Any other `wanNN` uses 512. |
-| `--wmem "A B C"` | unchanged | Set `net.ipv4.tcp_wmem` inside the namespaces. |
-| `--rmem "A B C"` | unchanged | Set `net.ipv4.tcp_rmem` inside the namespaces. |
+| `--wmem "A B C"` | the host's value | Set `net.ipv4.tcp_wmem` inside the namespaces. |
+| `--rmem "A B C"` | the host's value | Set `net.ipv4.tcp_rmem` inside the namespaces. |
 | `--out FILE` | `build/perf/results.csv` | Where to write the CSV. |
 
-The link rate is 1 Gbit/s. Set `PERF_RATE`, for example `PERF_RATE=100mbit`, to change it.
+Every run starts from the host's own TCP limits unless you pass `--wmem` or `--rmem`, so a result never depends on an earlier run. The link rate is 1 Gbit/s. Set `PERF_RATE`, for example `PERF_RATE=100mbit`, to change it.
 
 ## Reproducing the README numbers
 
@@ -65,4 +65,4 @@ Each run sends data from `/dev/zero` with `dd if=/dev/zero | ssh host 'cat > /de
 
 ## Limits
 
-This measures the effect of delay, rate and buffer limits on an otherwise clean path. It does not cover packet loss or jitter, scp or sftp, an HPN-SSH client against an OpenSSH server or the reverse, or different numbers of cipher threads. The CPU figures include the `dd` that feeds the pipe, which is small. The HPN-SSH client's CPU use can differ a lot between identical runs on long paths, so read the CPU range that `analyze` prints, not only the median.
+This measures the effect of delay, rate and buffer limits on an otherwise clean path. It does not cover packet loss or jitter, scp or sftp, an HPN-SSH client against an OpenSSH server or the reverse, or different numbers of cipher threads. The CPU figures include the `dd` that feeds the pipe, which is small. CPU use varies a little between runs, so read the CPU range that `analyze` prints as well as the median.

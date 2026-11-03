@@ -1,0 +1,46 @@
+From 828b65bc8b03ffc43bf378b62825f272ade75b4a Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] chachapoly-mt: refuse packets longer than the pregenerated
+ keystream
+
+The keystream for a packet is pregenerated: headerStream holds
+CHACHA_BLOCKLEN bytes and mainStream holds KEYSTREAMLEN bytes (about 32KB).
+len and aadlen come from the packet, and packets up to 256KiB are accepted,
+so a larger value read past the keystream into neighbouring state: wrong
+plaintext, or a crash past the end of the context. Return
+SSH_ERR_INVALID_ARGUMENT before anything else when either is too large.
+
+Without this, a 100000 byte and a 256KiB call to chachapoly_crypt_mt()
+return success.
+
+Changelog: sphynx 0.2.5
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cipher-chachapoly-libcrypto-mt.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/cipher-chachapoly-libcrypto-mt.c b/cipher-chachapoly-libcrypto-mt.c
+index b91ddb37d..bbe1d7c48 100644
+--- a/cipher-chachapoly-libcrypto-mt.c
++++ b/cipher-chachapoly-libcrypto-mt.c
+@@ -541,6 +541,18 @@ int
+ chachapoly_crypt_mt(struct chachapoly_ctx_mt *ctx_mt, u_int seqnr, u_char *dest,
+     const u_char *src, u_int len, u_int aadlen, u_int authlen, int do_encrypt)
+ {
++	/*
++	 * The keystream for a packet is pregenerated: headerStream holds
++	 * CHACHA_BLOCKLEN bytes and mainStream holds KEYSTREAMLEN bytes. len and
++	 * aadlen come from the packet, and a larger value would read past them
++	 * into the neighbouring keystream state. Refuse it, before anything else.
++	 */
++	if (aadlen > CHACHA_BLOCKLEN || len > KEYSTREAMLEN) {
++		debug_f("packet too large for the pregenerated keystream: "
++		    "len %u aadlen %u", len, aadlen);
++		return SSH_ERR_INVALID_ARGUMENT;
++	}
++
+ #ifdef SAFETY
+ 	if (ctx_mt->mainpid != getpid()) { /* we're a fork */
+ 		/*

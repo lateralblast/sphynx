@@ -1,0 +1,40 @@
+From 291f9ce0345cdbbfd98315a5e45ec8f20faa381c Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] aes-ctr-mt: destroy the thread attributes after use
+
+pthread_attr_init() was never paired with pthread_attr_destroy(), in either
+implementation. Destroy the attributes once the threads have been created.
+
+Changelog: sphynx 0.1.2
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cipher-ctr-mt-functions.c | 1 +
+ cipher-ctr-mt.c           | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/cipher-ctr-mt-functions.c b/cipher-ctr-mt-functions.c
+index 9f7acfd36..5112ad5ff 100644
+--- a/cipher-ctr-mt-functions.c
++++ b/cipher-ctr-mt-functions.c
+@@ -511,6 +511,7 @@ int aes_mt_start_threads(void *vevp_ctx, const u_char *key,
+ 			debug_f("AES-CTR MT spawned a thread with id %lu (%lu, %d)",
+ 			    aes_mt_ctx->tid[i], aes_mt_ctx->struct_id, aes_mt_ctx->id[i]);
+ 		}
++		pthread_attr_destroy(&attr);
+ 
+ 		pthread_mutex_lock(&aes_mt_ctx->q[0].lock);
+ 		// wait for all of the threads to be initialized
+diff --git a/cipher-ctr-mt.c b/cipher-ctr-mt.c
+index 4e56d26b4..75abb54fb 100644
+--- a/cipher-ctr-mt.c
++++ b/cipher-ctr-mt.c
+@@ -620,6 +620,7 @@ ssh_aes_ctr_init(EVP_CIPHER_CTX *ctx, const u_char *key, const u_char *iv,
+ 				fatal("AES-CTR MT Could not create thread in %s", __func__);
+ 			c->running++;
+ 		}
++		pthread_attr_destroy(&attr);
+ 
+ 		pthread_mutex_lock(&c->q[0].lock);
+ 		// wait for all of the threads to be initialized

@@ -56,7 +56,7 @@ pass "--jobs must be positive"
 # --- lint -----------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
+    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
     pass "shellcheck is clean"
 else
     echo "skip - shellcheck not installed"
@@ -94,6 +94,20 @@ if tests/tune-tcp.sh >"$TEST_DIR/tune-tcp.out" 2>&1; then
 else
     cat "$TEST_DIR/tune-tcp.out" >&2
     fail "tools/tune-tcp.sh tests"
+fi
+
+# --- patches ---------------------------------------------------------------
+
+base="$(tools/patches.sh base)"
+if git -C sphynx-ssh cat-file -e "$base^{commit}" 2>/dev/null; then
+    if out="$(tools/patches.sh check 2>&1)"; then
+        pass "patches/ applies to upstream and reproduces sphynx-ssh ($(find patches -name '*.patch' | wc -l) patches)"
+    else
+        echo "$out" >&2
+        fail "patches/ does not reproduce sphynx-ssh; regenerate it (see Patches in the README)"
+    fi
+else
+    echo "skip - sphynx-ssh does not have the upstream commit $base, so the patch series cannot be checked"
 fi
 
 # --- end-to-end build -----------------------------------------------------

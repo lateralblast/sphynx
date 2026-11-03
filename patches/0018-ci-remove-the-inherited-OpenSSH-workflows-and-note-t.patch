@@ -1,0 +1,662 @@
+From 8d4e69c8d5afd38f4d9d8804c6003cdcc23b8c96 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] ci: remove the inherited OpenSSH workflows and note the fork
+ in the README
+
+Fork-specific, not for upstream. Remove the workflows that only run for
+openssh/* repositories (selfhosted.yml, upstream.yml), that need a secret or
+a project the fork does not have (github-repo-stats.yml, cifuzz.yml), and the
+upstream badge page. Run c-cpp.yml on master only, give both remaining
+workflows read-only permissions, and label each pinned action with the
+release tag its commit was resolved to. Add a note to the README saying what
+the fork is and how its version string is made.
+
+Changelog: sphynx 0.1.3 to 0.1.9
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/ci-status.md                    |  35 ----
+ .github/workflows/c-cpp.yml             |  15 +-
+ .github/workflows/cifuzz.yml            |  33 ----
+ .github/workflows/github-repo-stats.yml |  19 ---
+ .github/workflows/selfhosted.yml        | 212 ------------------------
+ .github/workflows/upstream.yml          |  89 ----------
+ .github/workflows/vm.yml                |  35 ++--
+ README.md                               |   8 +
+ 8 files changed, 36 insertions(+), 410 deletions(-)
+ delete mode 100644 .github/ci-status.md
+ delete mode 100644 .github/workflows/cifuzz.yml
+ delete mode 100644 .github/workflows/github-repo-stats.yml
+ delete mode 100644 .github/workflows/selfhosted.yml
+ delete mode 100644 .github/workflows/upstream.yml
+
+diff --git a/.github/ci-status.md b/.github/ci-status.md
+deleted file mode 100644
+index 982f52428..000000000
+--- a/.github/ci-status.md
++++ /dev/null
+@@ -1,35 +0,0 @@
+-master :
+-[![C/C++ CI](../../../actions/workflows/c-cpp.yml/badge.svg)](../../../actions/workflows/c-cpp.yml?query=branch:master)
+-[![VM CI](../../../actions/workflows/vm.yml/badge.svg)](../../../actions/workflows/vm.yml?query=branch:master)
+-[![C/C++ CI self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml/badge.svg)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml?query=branch:master)
+-[![Upstream self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/upstream.yml/badge.svg)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/upstream.yml?query=branch:master)
+-[![CIFuzz](../../../actions/workflows/cifuzz.yml/badge.svg)](../../../actions/workflows/cifuzz.yml)
+-[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/openssh.svg)](https://issues.oss-fuzz.com/issues?q="Project:+openssh"+is:open)
+-[![Coverity Status](https://scan.coverity.com/projects/21341/badge.svg)](https://scan.coverity.com/projects/openssh-portable)
+-<br>
+-
+-10.5 :
+-[![C/C++ CI](../../../actions/workflows/c-cpp.yml/badge.svg?branch=V_10_5)](../../../actions/workflows/c-cpp.yml?query=branch:V_10_5)
+-[![VM CI](../../../actions/workflows/vm.yml/badge.svg?branch=V_10_5)](../../../actions/workflows/vm.yml?query=branch:V_10_5)
+-[![C/C++ CI self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml/badge.svg?branch=V_10_5)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml?query=branch:V_10_5)
+-
+-10.4 :
+-[![C/C++ CI](../../../actions/workflows/c-cpp.yml/badge.svg?branch=V_10_4)](../../../actions/workflows/c-cpp.yml?query=branch:V_10_4)
+-[![VM CI](../../../actions/workflows/vm.yml/badge.svg?branch=V_10_4)](../../../actions/workflows/vm.yml?query=branch:V_10_4)
+-[![C/C++ CI self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml/badge.svg?branch=V_10_4)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml?query=branch:V_10_4)
+-
+-10.3 :
+-[![C/C++ CI](../../../actions/workflows/c-cpp.yml/badge.svg?branch=V_10_3)](../../../actions/workflows/c-cpp.yml?query=branch:V_10_3)
+-[![VM CI](../../../actions/workflows/vm.yml/badge.svg?branch=V_10_3)](../../../actions/workflows/vm.yml?query=branch:V_10_3)
+-[![C/C++ CI self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml/badge.svg?branch=V_10_3)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml?query=branch:V_10_3)
+-
+-10.2 :
+-[![C/C++ CI](../../../actions/workflows/c-cpp.yml/badge.svg?branch=V_10_2)](../../../actions/workflows/c-cpp.yml?query=branch:V_10_2)
+-[![VM CI](../../../actions/workflows/vm.yml/badge.svg?branch=V_10_2)](../../../actions/workflows/vm.yml?query=branch:V_10_2)
+-[![C/C++ CI self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml/badge.svg?branch=V_10_2)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml?query=branch:V_10_2)
+-
+-10.1 :
+-[![C/C++ CI](../../../actions/workflows/c-cpp.yml/badge.svg?branch=V_10_1)](../../../actions/workflows/c-cpp.yml?query=branch:V_10_1)
+-[![VM CI](../../../actions/workflows/vm.yml/badge.svg?branch=V_10_1)](../../../actions/workflows/vm.yml?query=branch:V_10_1)
+-[![C/C++ CI self-hosted](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml/badge.svg?branch=V_10_1)](https://github.com/openssh/openssh-portable-selfhosted/actions/workflows/selfhosted.yml?query=branch:V_10_1)
+-
+diff --git a/.github/workflows/c-cpp.yml b/.github/workflows/c-cpp.yml
+index 0ae4969ff..24cc598da 100644
+--- a/.github/workflows/c-cpp.yml
++++ b/.github/workflows/c-cpp.yml
+@@ -23,12 +23,15 @@ name: CI
+ 
+ on:
+   push:
+-    branches: [ master, dev_major, dev_minor, DynamicWindow ]
++    branches: [ master ]
+ #    paths: [ '**.c', '**.h', '**.m4', '**.sh', '**/Makefile.in', 'configure.ac', '.github/configs', '.github/*.sh', '.github/workflows/c-cpp.yml' ]
+   pull_request:
+-    branches: [ master, dev_major, dev_minor, DynamicWindow ]
++    branches: [ master ]
+ #    paths: [ '**.c', '**.h', '**.m4', '**.sh', '**/Makefile.in', 'configure.ac', '.github/configs', '.github/*.sh', '.github/workflows/c-cpp.yml' ]
+ 
++permissions:
++  contents: read
++
+ jobs:
+   ci:
+     name: "${{ matrix.target }} ${{ matrix.config }}"
+@@ -166,11 +169,11 @@ jobs:
+     - name: install cygwin
+       id: cygwin_install
+       if: ${{ startsWith(matrix.target, 'windows') }}
+-      uses: cygwin/cygwin-install-action@a3d72946b163026bbd0fa9a88379ccbda4bd86bb # master
++      uses: cygwin/cygwin-install-action@a3d72946b163026bbd0fa9a88379ccbda4bd86bb # master (no release tag at this commit)
+       with: # testing pin the version we are using
+         packages: cygwin=3.6.10-1 # testing potential cygwin error with latest release
+     - name: checkout openssh git repo
+-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
++      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+     - name: setup CI system
+       run: |
+         sh -c "timeout 1200 .github/setup_ci.sh ${{ matrix.config }} ${{ matrix.target }} || .github/setup_ci.sh ${{ matrix.config }} ${{ matrix.target }}"
+@@ -181,7 +184,7 @@ jobs:
+     - name: configure
+       run: sh ./.github/configure.sh ${{ matrix.config }}
+     - name: save config
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
++      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+       with:
+         name: ${{ matrix.target }}-${{ matrix.config }}-config
+         path: config.h
+@@ -209,7 +212,7 @@ jobs:
+       run: sh -c 'for i in regress/failed*.log; do echo ====; echo logfile $i; echo =====; tail -50 $i; done'
+     - name: save logs
+       if: failure()
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
++      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+       with:
+         name: ${{ matrix.target }}-${{ matrix.config }}-logs
+         path: |
+diff --git a/.github/workflows/cifuzz.yml b/.github/workflows/cifuzz.yml
+deleted file mode 100644
+index 0f5180132..000000000
+--- a/.github/workflows/cifuzz.yml
++++ /dev/null
+@@ -1,33 +0,0 @@
+-name: CIFuzz
+-on:
+-  push:
+-    branches: [dev_minor, dev_major, release_candidates]
+-    paths: [ '**.c', '**.h', '**.m4', '**.sh', '.github/**', '**/Makefile.in', 'configure.ac' ]
+-  pull_request:
+-    paths: [ '**.c', '**.h', '**.m4', '**.sh', '**/Makefile.in', 'configure.ac', '.github/configs', '.github/workflows/cifuzz.yml' ]
+-
+-jobs:
+-  Fuzzing:
+-    if: github.repository != 'rapier1/hpn-ssh-selfhosted'
+-    runs-on: ubuntu-latest
+-    steps:
+-    - name: Build Fuzzers
+-      id: build
+-      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@b1836d5aed2e5aaae7f618ddd40bbcc477119825 # master
+-      with:
+-        oss-fuzz-project-name: 'hpn-ssh'
+-        dry-run: false
+-        language: c++
+-    - name: Run Fuzzers
+-      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@b1836d5aed2e5aaae7f618ddd40bbcc477119825 # master
+-      with:
+-        oss-fuzz-project-name: 'hpn-ssh'
+-        fuzz-seconds: 600
+-        dry-run: false
+-        language: c++
+-    - name: Upload Crash
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
+-      if: failure() && steps.build.outcome == 'success'
+-      with:
+-        name: artifacts
+-        path: ./out/artifacts
+\ No newline at end of file
+diff --git a/.github/workflows/github-repo-stats.yml b/.github/workflows/github-repo-stats.yml
+deleted file mode 100644
+index fb130a1b8..000000000
+--- a/.github/workflows/github-repo-stats.yml
++++ /dev/null
+@@ -1,19 +0,0 @@
+-name: github-repo-stats
+-
+-on:
+-  schedule:
+-    # Run this once per day, towards the end of the day for keeping the most
+-    # recent data point most meaningful (hours are interpreted in UTC).
+-    - cron: "0 23 * * *"
+-  workflow_dispatch: # Allow for running this manually.
+-
+-jobs:
+-  j1:
+-    name: github-repo-stats
+-    runs-on: ubuntu-latest
+-    steps:
+-      - name: run-ghrs
+-        # Use latest release.
+-        uses: jgehrcke/github-repo-stats@RELEASE
+-        with:
+-          ghtoken: ${{ secrets.ghrs_github_api_token }}
+diff --git a/.github/workflows/selfhosted.yml b/.github/workflows/selfhosted.yml
+deleted file mode 100644
+index b407d8645..000000000
+--- a/.github/workflows/selfhosted.yml
++++ /dev/null
+@@ -1,212 +0,0 @@
+-name: CI self-hosted
+-
+-on:
+-  push:
+-    paths: [ '**.c', '**.h', '**.m4', '**.sh', '**/Makefile.in', 'configure.ac','regress/Makefile',  '.github/configs', '.github/run_tests.sh', '.github/workflows/selfhosted.yml' ]
+-
+-jobs:
+-  selfhosted:
+-    name: "${{ matrix.target }} ${{ matrix.config }}"
+-    if: github.repository == 'openssh/openssh-portable-selfhosted'
+-    runs-on: ${{ matrix.host }}
+-    timeout-minutes: 600
+-    env:
+-      HOST: ${{ matrix.host }}
+-      TARGET_HOST: ${{ matrix.target }}
+-      TARGET_CONFIG: ${{ matrix.config }}
+-      TARGET_DOMAIN: ${{ startsWith(matrix.host, 'libvirt') && format('{0}-{1}-{2}', matrix.target, matrix.config, github.run_id) || matrix.target }}
+-      EPHEMERAL: ${{ startsWith(matrix.host, 'libvirt') }}
+-      PERSISTENT: ${{ startsWith(matrix.host, 'persist') }}
+-      REMOTE: ${{ startsWith(matrix.host, 'remote') }}
+-      VM: ${{ startsWith(matrix.host, 'libvirt') || startsWith(matrix.host, 'persist') }}
+-      SSHFS: ${{ startsWith(matrix.host, 'libvirt') || startsWith(matrix.host, 'persist') || startsWith(matrix.host, 'remote') }}
+-      BIGENDIAN: ${{ matrix.target == 'aix51' || matrix.target == 'nbsd-arm64be' || matrix.target == 'openwrt-mips' }}
+-    strategy:
+-      fail-fast: false
+-      # We use a matrix in two parts: firstly all of the VMs are tested with the
+-      # default config.  "target" corresponds to a label associated with the
+-      # worker.  The default is an ephemeral VM running under libvirt.
+-      matrix:
+-        target:
+-          - alpine
+-          - centos7
+-          - debian-i386
+-          - dfly30
+-          - dfly48
+-          - dfly60
+-          - dfly62
+-          - dfly64
+-          - fbsd10
+-          - fbsd12
+-          - fbsd13
+-          - fbsd14
+-          - fbsd15
+-          - nbsd3
+-          - nbsd4
+-          - nbsd8
+-          - nbsd9
+-          - nbsd10
+-          - nbsd11
+-          - obsd51
+-          - obsd67
+-          - obsd72
+-          - obsd74
+-          - obsd76
+-          - obsd77
+-          - obsd78
+-          - obsd79
+-          - obsdsnap
+-          - obsdsnap-i386
+-          - omnios
+-          - openindiana
+-          - ubuntu-2204
+-        config:
+-          - default
+-        host:
+-          - libvirt
+-        include:
+-          # Long-running/slow tests have access to high priority runners.
+-          - { target: aix51, config: default, host: libvirt-hipri }
+-          - { target: openindiana, config: pam, host: libvirt-hipri }
+-          - { target: sol10,  config: default, host: libvirt-hipri }
+-          - { target: sol10,  config: pam, host: libvirt-hipri }
+-          - { target: sol11,  config: default, host: libvirt-hipri }
+-          - { target: sol11,  config: pam-krb5, host: libvirt-hipri }
+-          - { target: sol11,  config: sol64, host: libvirt-hipri }
+-          # Then we include extra libvirt test configs.
+-          - { target: centos7, config: pam, host: libvirt }
+-          - { target: debian-i386, config: pam, host: libvirt }
+-          - { target: dfly30, config: without-openssl, host: libvirt}
+-          - { target: dfly48, config: pam ,host: libvirt }
+-          - { target: dfly58, config: pam, host: libvirt }
+-          - { target: dfly60, config: pam, host: libvirt }
+-          - { target: dfly62, config: pam, host: libvirt }
+-          - { target: dfly64, config: pam, host: libvirt }
+-          - { target: fbsd10, config: pam, host: libvirt }
+-          - { target: fbsd12, config: pam, host: libvirt }
+-          - { target: fbsd13, config: pam, host: libvirt }
+-          - { target: fbsd14, config: pam, host: libvirt }
+-          - { target: fbsd15, config: pam, host: libvirt }
+-          - { target: nbsd8,  config: pam, host: libvirt }
+-          - { target: nbsd9,  config: pam, host: libvirt }
+-          - { target: nbsd10, config: pam, host: libvirt }
+-          - { target: nbsd11, config: pam, host: libvirt }
+-          - { target: omnios, config: pam, host: libvirt }
+-          # ARM64 VMs
+-          - { target: obsdsnap-arm64, config: default, host: libvirt-arm64 }
+-          # VMs with persistent disks that have their own runner.
+-          - { target: win10, config: default,        host: persist-win10 }
+-          - { target: win10, config: cygwin-release, host: persist-win10 }
+-          # Physical hosts with native runners.
+-          - { target: ARM64, config: default, host: ARM64 }
+-          - { target: ARM64, config: pam, host: ARM64 }
+-          # Physical hosts with remote runners.
+-          - { target: debian-arm, config: default, host: remote-debian-arm}
+-          - { target: debian-riscv64, config: default, host: remote-debian-riscv64 }
+-          - { target: openwrt-mips, config: default, host: remote-openwrt-mips }
+-          - { target: openwrt-mipsel, config: default, host: remote-openwrt-mipsel }
+-          - { target: nbsd-arm64be, config: default, host: remote-nbsd-arm64be }
+-    steps:
+-    - name: shutdown VM if running
+-      if: env.VM == 'true'
+-      run: vmshutdown
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
+-    - name: autoreconf
+-      run: autoreconf
+-    - name: startup VM
+-      if: env.VM == 'true'
+-      run: vmstartup
+-      working-directory: ${{ runner.temp }}
+-    - name: copy and mount workspace
+-      if: env.SSHFS == 'true'
+-      run: sshfs_mount
+-      working-directory: ${{ runner.temp }}
+-    - name: configure
+-      run: vmrun ./.github/configure.sh ${{ matrix.config }}
+-#    - name: save config
+-#      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
+-#      with:
+-#        name: ${{ matrix.target }}-${{ matrix.config }}-config
+-#        path: config.h
+-    - name: make clean
+-      run: vmrun make clean
+-    - name: make
+-      run: vmrun make
+-    - name: make tests
+-      run: vmrun ./.github/run_test.sh ${{ matrix.config }}
+-      timeout-minutes: 600
+-    - name: show logs
+-      if: failure()
+-      run: vmrun 'for i in regress/failed*.log; do echo ====; echo logfile $i; echo =====; cat $i; done'
+-    - name: save logs
+-      if: failure()
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
+-      with:
+-        name: ${{ matrix.target }}-${{ matrix.config }}-logs
+-        path: |
+-          config.h
+-          config.log
+-          regress/*.log
+-          regress/log/*
+-          regress/valgrind-out/
+-    - name: unmount workspace
+-      if: always() && env.SSHFS == 'true'
+-      run: fusermount -u ${GITHUB_WORKSPACE} || true
+-      working-directory: ${{ runner.temp }}
+-
+-    - name: bigendian interop - mount regress
+-      if: env.SSHFS == 'true' && env.BIGENDIAN == 'true'
+-      run: |
+-        set -x
+-        vmrun sudo chown -R $LOGNAME ~/$(basename ${GITHUB_WORKSPACE}) || true
+-        vmrun "cd $(basename ${GITHUB_WORKSPACE}/regress) && sudo make clean"
+-        sshfs_mount regress
+-        vmrun "sudo mkdir -p $(dirname ${GITHUB_WORKSPACE})"
+-        vmrun "sudo ln -s ~/$(basename ${GITHUB_WORKSPACE}) ${GITHUB_WORKSPACE}"
+-      working-directory: ${{ runner.temp }}
+-
+-    - name: bigendian interop - host build
+-      if: env.SSHFS == 'true' && env.BIGENDIAN == 'true'
+-      run: |
+-        set -x
+-        ./.github/configure.sh ${{ matrix.config }}
+-        pwd
+-        ls -ld regress || true
+-        ls -l regress/check-perm || true
+-        make clean
+-        make
+-
+-    - name: bigendian interop - test
+-      if: env.SSHFS == 'true' && env.BIGENDIAN == 'true'
+-      env:
+-        TEST_SSH_UNSAFE_PERMISSIONS: 1
+-      run: |
+-        set -x
+-        echo "#!/bin/sh" >remote_sshd
+-        echo "exec /usr/bin/ssh ${TARGET_DOMAIN} exec /home/builder/$(basename ${GITHUB_WORKSPACE})/sshd "'$@' >>remote_sshd
+-        chmod 755 remote_sshd
+-        make t-exec TEST_SSH_SSHD=`pwd`/remote_sshd LTESTS="try-ciphers kextype keytype"
+-
+-    - name: bigendian interop - save logs
+-      if: failure() && env.BIGENDIAN == 'true'
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
+-      with:
+-        name: ${{ matrix.target }}-${{ matrix.config }}-interop-logs
+-        path: |
+-          config.h
+-          config.log
+-          regress/*.log
+-          regress/log/*
+-
+-    - name: bigendian interop - unmount regress
+-      if: always() && env.SSHFS == 'true' && env.BIGENDIAN == 'true'
+-      run: fusermount -z -u ${GITHUB_WORKSPACE}/regress || true
+-      working-directory: ${{ runner.temp }}
+-
+-    - name: lazily unmount workspace
+-      if: always() && env.SSHFS == 'true'
+-      run: fusermount -z -u ${GITHUB_WORKSPACE} || true
+-      working-directory: ${{ runner.temp }}
+-    - name: shutdown VM
+-      if: always() && env.VM == 'true'
+-      run: vmshutdown
+diff --git a/.github/workflows/upstream.yml b/.github/workflows/upstream.yml
+deleted file mode 100644
+index d40b509fd..000000000
+--- a/.github/workflows/upstream.yml
++++ /dev/null
+@@ -1,89 +0,0 @@
+-name: OpenBSD
+-
+-on:
+-  push:
+-    branches: [ master ]
+-    paths: [ '**.c', '**.h', '**.sh', '.github/workflows/upstream.yml' ]
+-
+-jobs:
+-  selfhosted:
+-    name: "upstream ${{ matrix.target }} ${{ matrix.config }}"
+-    if: github.repository == 'openssh/openssh-portable-selfhosted'
+-    runs-on: ${{ matrix.host }}
+-    env:
+-      EPHEMERAL: true
+-      HOST:  ${{ matrix.host }}
+-      TARGET_HOST: ${{ matrix.target }}
+-      TARGET_CONFIG: ${{ matrix.config }}
+-      TARGET_DOMAIN: ${{ format('{0}-{1}-{2}', matrix.target, matrix.config, github.run_id) || matrix.target }}
+-    strategy:
+-      fail-fast: false
+-      matrix:
+-        host:
+-          - libvirt
+-        target: [ obsdsnap, obsdsnap-i386 ]
+-        # TODO: restore 'ubsan' once fixed
+-        config: [ default, kerberos5, without-openssl ]
+-        include:
+-          - { host: libvirt-arm64, target: obsdsnap-arm64, config: default }
+-          - { host: libvirt-arm64, target: obsdsnap-arm64, config: kerberos5 }
+-          - { host: libvirt-arm64, target: obsdsnap-arm64, config: without-openssl }
+-          # - { host: libvirt-arm64, target: obsdsnap-arm64, config: ubsan }
+-    steps:
+-    - name: unmount stale workspace
+-      run: fusermount -u ${GITHUB_WORKSPACE} || true
+-      working-directory: ${{ runner.temp }}
+-    - name: shutdown VM if running
+-      run: vmshutdown
+-      working-directory: ${{ runner.temp }}
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
+-    - name: startup VM
+-      run: vmstartup
+-      working-directory: ${{ runner.temp }}
+-    - name: copy and mount workspace
+-      run: sshfs_mount
+-      working-directory: ${{ runner.temp }}
+-    - name: update source
+-      run: vmrun "cd /usr/src && if [ -d .git ]; then git pull && git log -n1; else cvs -q up -dPA usr.bin/ssh regress/usr.bin/ssh usr.bin/nc; fi"
+-    - name: set build options in /etc/mk.conf
+-      run: |
+-        case ${{ matrix.config }} in \
+-          without-openssl) o='OPENSSL=no' ;; \
+-          kerberos5) o='KERBEROS5=yes' ;; \
+-          ubsan) o='DEBUG=-fsanitize-minimal-runtime -fsanitize=undefined';; \
+-        esac
+-        vmrun "echo $o | sudo tee -a /etc/mk.conf"
+-    - name: update netcat
+-      run: vmrun "cd /usr/src/usr.bin/nc && make clean all && sudo make install || true"
+-    - name: make clean
+-      run: vmrun "make -C /usr/src/usr.bin/ssh obj clean && make -C /usr/src/regress/usr.bin/ssh obj clean && sudo chmod -R g-w /usr/src /usr/obj"
+-    - name: make
+-      run: vmrun " make -C /usr/src/usr.bin/ssh"
+-    - name: make install
+-      run: vmrun "sudo make -C /usr/src/usr.bin/ssh install && sudo /etc/rc.d/sshd -f restart"
+-    - name: make tests`
+-      run: vmrun "cd /usr/src/regress/usr.bin/ssh && case ${{ matrix.config }} in without-openssl) make OPENSSL=no;; *) make;; esac"
+-      env:
+-        SUDO: sudo
+-      timeout-minutes: 300
+-    - name: show logs
+-      if: failure()
+-      run: vmrun 'for i in /usr/src/regress/usr.bin/ssh/obj/*.log; do echo ====; echo logfile $i; echo =====; cat $i; done'
+-    - name: save logs
+-      if: failure()
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
+-      with:
+-        name: ${{ matrix.target }}-${{ matrix.config }}-logs
+-        path: |
+-          /usr/src/regress/usr.bin/ssh/obj/*.log
+-          /usr/src/regress/usr.bin/ssh/obj/log/*
+-    - name: unmount workspace
+-      if: always()
+-      run: |
+-        fusermount -u ${GITHUB_WORKSPACE} || true
+-        fusermount -z -u ${GITHUB_WORKSPACE} || true
+-      working-directory: ${{ runner.temp }}
+-    - name: shutdown VM
+-      if: always()
+-      run: vmshutdown
+-      working-directory: ${{ runner.temp }}
+diff --git a/.github/workflows/vm.yml b/.github/workflows/vm.yml
+index 1dfcfbcc3..04ded566d 100644
+--- a/.github/workflows/vm.yml
++++ b/.github/workflows/vm.yml
+@@ -11,6 +11,9 @@ on:
+   pull_request:
+     paths: [ '**.c', '**.h', '**.m4', '**.sh', '**/Makefile.in', 'configure.ac', 'regress/Makefile', '.github/configs', '.github/workflows/vm.yml' ]
+ 
++permissions:
++  contents: read
++
+ jobs:
+   dragonflybsd:
+     name: "dragonflybsd-${{ matrix.target }}"
+@@ -23,12 +26,12 @@ jobs:
+         config: [default]
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
++    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+     - name: autoreconf
+       run: sh -c autoreconf
+ 
+     - name: start DragonFlyBSD ${{ matrix.target }} VM
+-      uses: vmactions/dragonflybsd-vm@4ba8127bd95c94b66fc4b885e37c99955ba308ea # v1
++      uses: vmactions/dragonflybsd-vm@4ba8127bd95c94b66fc4b885e37c99955ba308ea # v1.3.0
+       with:
+         release: ${{ matrix.target }}
+         usesh: true
+@@ -86,12 +89,12 @@ jobs:
+         config: [default]
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
++    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+     - name: autoreconf
+       run: sh -c autoreconf
+ 
+     - name: start FreeBSD ${{ matrix.target }} VM
+-      uses: vmactions/freebsd-vm@b84ab5559b5a1bb4b8ee2737d2506a16e1737636 # v1
++      uses: vmactions/freebsd-vm@b84ab5559b5a1bb4b8ee2737d2506a16e1737636 # v1.4.8
+       with:
+         release: ${{ matrix.target }}
+         usesh: true
+@@ -168,12 +171,12 @@ jobs:
+         config: [default]
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # main
++    - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # main (no release tag at this commit)
+     - name: autoreconf
+       run: sh -c autoreconf
+ 
+     - name: start NetBSD ${{ matrix.target }} VM
+-      uses: vmactions/netbsd-vm@00081e82b14bc40114eb97f32b4455306828516b # v1
++      uses: vmactions/netbsd-vm@00081e82b14bc40114eb97f32b4455306828516b # v1.4.6
+       with:
+         release: ${{ matrix.target }}
+         usesh: true
+@@ -243,12 +246,12 @@ jobs:
+         config: [default]
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
++    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+     - name: autoreconf
+       run: sh -c autoreconf
+ 
+     - name: start OmniOS ${{ matrix.target }} VM
+-      uses: vmactions/omnios-vm@7f2be0b927aad1a78498c8aeeac4c4ce1fabd322 # v1
++      uses: vmactions/omnios-vm@7f2be0b927aad1a78498c8aeeac4c4ce1fabd322 # v1.3.3
+       with:
+         release: ${{ matrix.target }}
+         usesh: true
+@@ -300,12 +303,12 @@ jobs:
+         config: [default]
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
++    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+     - name: autoreconf
+       run: sh -c autoreconf
+ 
+     - name: start OpenBSD ${{ matrix.target }} VM
+-      uses: vmactions/openbsd-vm@18edb32f4e48dae5865d7b8b3a9587bc01218a20 # v1
++      uses: vmactions/openbsd-vm@18edb32f4e48dae5865d7b8b3a9587bc01218a20 # v1.4.4
+       with:
+         release: ${{ matrix.target }}
+         usesh: true
+@@ -349,7 +352,7 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+     - name: start OpenBSD VM
+-      uses: vmactions/openbsd-vm@18edb32f4e48dae5865d7b8b3a9587bc01218a20 # v1
++      uses: vmactions/openbsd-vm@18edb32f4e48dae5865d7b8b3a9587bc01218a20 # v1.4.4
+       with:
+         copyback: false
+         nat: |
+@@ -371,7 +374,7 @@ jobs:
+         echo "SNAPSHOT_VERSION=${ver}" >> $GITHUB_ENV
+     - name: check for cached sysupgrade
+       id: cache-sysupgrade
+-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
++      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+       with:
+         key: openbsd-sysupgrade ${{ env.SNAPSHOT_VERSION }}
+         path: /tmp/_sysupgrade/
+@@ -391,7 +394,7 @@ jobs:
+         rsync -av openbsd:/home/_sysupgrade/ /tmp/_sysupgrade/
+     - name: save sysupgrade to cache
+       if: steps.cache-sysupgrade.outputs.cache-hit != 'true'
+-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
++      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+       with:
+         key: openbsd-sysupgrade ${{ env.SNAPSHOT_VERSION }}
+         path: /tmp/_sysupgrade/
+@@ -431,7 +434,7 @@ jobs:
+         for i in regress-logs/failed*.log; do echo ===; echo LOGFILE: $i; echo ===; cat $i; echo; done
+     - name: save logs
+       if: failure()
+-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # main
++      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+       with:
+         name: openbsd-current-upstream-logs
+         path: regress-logs/*.log
+@@ -449,12 +452,12 @@ jobs:
+         config: [default]
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # main
++    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+     - name: autoreconf
+       run: sh -c autoreconf
+ 
+     - name: start Solaris ${{ matrix.target }} VM
+-      uses: vmactions/solaris-vm@d30dd6c228c8661ade859e36ead7660b9a62efcc # v1
++      uses: vmactions/solaris-vm@d30dd6c228c8661ade859e36ead7660b9a62efcc # v1.3.7
+       with:
+         release: ${{ matrix.target }}
+         usesh: true
+diff --git a/README.md b/README.md
+index 9e99d0a48..9d3c84513 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,11 @@
++# sphynx-ssh
++
++sphynx-ssh is a fork of [HPN-SSH](https://github.com/rapier1/hpn-ssh) used as the source for the sphynx wrapper, which builds and packages it for target systems. Its version string is `OpenSSH_<base>_hpn<version>_sphynx<version>`, set in `version.h`. Upstream OpenSSH and HPN-SSH documentation is below, unchanged except where noted.
++
++Continuous integration runs `c-cpp.yml` on pushes and pull requests to `master`, and `vm.yml` on pushes that change source files. The tests are the OpenSSH regression suite (`make tests`).
++
++---
++
+ # HPNSSH: Based on Portable OpenSSH
+ HPN-SSH is a high performance soft fork of OpenSSH that can provide significantly faster throughput for bulk data transfers over a wide range of network paths. In some situations we've seen throughput rates more than 100 times faster than OpenSSH. HPN-SSH is able to do this by optimizing the application layer receive buffer to match the TCP receive buffer. Notably, to see performance improvements HPN-SSH only needs to be the data receiver so users can see notable improvements with many other SSH implementations. HPN-SSH also incorporates two parallelized ciphers, AES-CTR and Chacha20 (the default). When using these ciphers a throughput performance increase of 30% is typical. More information on how we do this work and other features of HPN-SSH is available from [https://hpnssh.org](https://hpnssh.org).
+ 

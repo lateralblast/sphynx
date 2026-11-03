@@ -2,10 +2,13 @@
 
 Status: `[ ]` open, `[~]` in progress, `[x]` done.
 
+See [HANDOFF.md](HANDOFF.md) for the current state and suggested order.
+
 ## Open
 
-- [ ] sphynx-ssh: the HPN-SSH client sometimes uses far more CPU than OpenSSH on long paths, and which it does varies between identical runs. With the default 4 MB send buffer limit it spent about a full core for the whole transfer in 19 of 24 runs (about 19 CPU-seconds per GB at 50 ms, 37 at 100 ms), 2 to 3 in 4 runs (the same as OpenSSH's 1.8 to 2.0), and 13.5 once. With the limit lifted it was steady at 7 to 9. A 96 MB transfer made about 85,000 `ppoll` calls against about 4,600 for OpenSSH. A profile shows the time in the polling path (`memmove`, `poll`, `channel_prepare_poll`, `channel_handle_rfd`), not in the ciphers. Find out why the client loop wakes so often, what decides whether it does, and whether it can batch work.
 - [ ] sphynx: extend the performance comparison to scp and sftp transfers, an HPN-SSH client against an OpenSSH server and the reverse, different `SSH_CIPHER_THREADS` values, and packet loss and jitter (`netem loss`, `netem jitter`).
+- [ ] sphynx-ssh: with the default 4 MB send buffer limit the HPN-SSH client still uses about 1 to 2 CPU-seconds per GB more than OpenSSH on long paths (2.6 to 3.3 against 1.1 to 1.9, measured on 0.3.4), though with the limit lifted the two are within 0.4. Not investigated. It may be the larger channel buffers or the window growth.
+- [ ] sphynx-ssh: the full-CPU spin fixed in 0.3.4 (patch 0016) has no automated test. A unit test needs a `Channel`, and `channel_pre_open` is static. An end-to-end check (the client's CPU per GB over a 50 ms path is under a ceiling) needs a running `hpnsshd`, network namespaces and `sudo`, so it would be part of `tools/perf`, not `tests/run-tests.sh`.
 - [ ] Install the built `.deb` on a clean Ubuntu VM or container and test install, upgrade, remove and purge, including the `hpnsshd` service and key generation.
 - [ ] Run `lintian` on the built `.deb` and fix what it reports.
 - [ ] Add a Debian target (`--target debian`).
@@ -65,6 +68,9 @@ Not yet reviewed:
 
 ## Done
 
+- [x] sphynx: the patch series, `patches/` (18 patches on upstream commit `2c7cc5554`), `patches/BASE` and `tools/patches.sh` (`check`, `apply`, `base`), documented in the README under "Patches" (0.3.6).
+- [x] sphynx: `tools/perf/perf.sh run` starts every run from the host's own TCP limits, so a result no longer depends on an earlier run's `--wmem` or `--rmem` (0.3.5).
+- [x] sphynx-ssh: the HPN-SSH client and server spun at full CPU on long paths, in most runs with the default buffer limit (19 to 37 CPU-seconds per GB against under 2 for OpenSSH). `channel_pre_open()` armed the input fd with `sshbuf_check_reserve()`, but `channel_handle_rfd()` reads only when `sshbuf_avail()` is non-zero, and for channel input buffers that keeps 1/21 of the buffer as headroom. In that band `ppoll()` returned at once and the read was skipped. Found with `strace` (polls with no `read`) and `gdb` (`len(input)=15978301`, `avail=0`, `io_want=1`). Fixed with `channel_input_can_read()`, used in both places that arm the read; the client now uses 1.8 to 3.3 CPU-seconds per GB with unchanged throughput (0.3.4). The OpenSSH regression suite passes on the fixed build (all tests passed, 87 checks).
 - [x] sphynx: `tools/tune-tcp.sh` applies and reverts the TCP buffer tuning, documented in the README under "Using the script" (0.3.3).
 - [x] sphynx: moved the performance harness into the repository as `tools/perf/` (`perf.sh`, `build-baseline.sh`, `analyze.py`), with paths relative to the repository and results in the git-ignored `build/perf/` (0.3.2).
 - [x] sphynx: documented the TCP send buffer limit and ship an opt-in example, `/usr/share/doc/hpn-ssh/examples/99-hpn-ssh-tcp.conf` (0.3.1). The package does not apply it.

@@ -1,0 +1,38 @@
+From eb9d33146505c57f8d45f1f930c853bafac692f8 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] scp: reset the match status for each file in the sender
+
+The sender's match status was set once per source() call and only reassigned
+to "M" or "F", so a later file in the same call sent an earlier file's status.
+That happens when one call handles several files, for example a remote glob
+or -r. The sink then took the wrong branch and the protocol desynchronised.
+Start every file from the no-match default.
+
+Changelog: sphynx 0.2.6
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ scp.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/scp.c b/scp.c
+index 9da45a607..3e5660aec 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1519,9 +1519,14 @@ source(int argc, char **argv)
+ 	size_t insize;
+ 	unsigned long long ull;
+ 	char *match; /* used to communicate fragment match */
+-	match = "\0"; /*default is to fail the match. NULL and F both indicate fail*/
+ 
+ 	for (indx = 0; indx < argc; ++indx) {
++		/*
++		 * The match status belongs to one file. It starts from the "no
++		 * match" default (NULL and F both indicate fail) for every file, or
++		 * a stale M or F from an earlier file is sent for a later one.
++		 */
++		match = "\0";
+ 		name = argv[indx];
+ #ifdef DEBUG
+ 		fprintf(stderr, "%s index is %d, name is %s\n", hostname, indx, name);

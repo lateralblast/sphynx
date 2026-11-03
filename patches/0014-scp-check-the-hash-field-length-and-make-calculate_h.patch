@@ -1,0 +1,168 @@
+From 83023c8d9eac930c6512f6fc958aa1cad595421b Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] scp: check the hash field length and make calculate_hash
+ fixed width
+
+The sink copied exactly 128 bytes of hash out of the record without checking
+that the line was that long, reading past the end into stale buffer contents
+when it was not. calculate_hash() returned an empty string or a single space
+when the file could not be opened, left md_len uninitialised when the digest
+was unavailable, and silently hashed fewer bytes when the file was shorter
+than requested.
+
+Check the hash field is all there before reading it. Make calculate_hash()
+always produce a fixed-width field: 128 '0' characters on any failure, which
+keeps the record the right length and never matches a real digest. Also
+parenthesise BUF_AND_HASH.
+
+Changelog: sphynx 0.2.9
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ scp.c | 92 ++++++++++++++++++++++++++++++++++++-----------------------
+ 1 file changed, 56 insertions(+), 36 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index ac6f5bb62..16902afd8 100644
+--- a/scp.c
++++ b/scp.c
+@@ -188,7 +188,7 @@ char hostname[HOST_NAME_MAX + 1];
+ 
+ /* defines for the resume function. Need them even if not supported */
+ #define HASH_LEN 128               /*40 sha1, 64 blake2s256 128 blake2b512*/
+-#define BUF_AND_HASH HASH_LEN + 64 /* length of the hash and other data to get size of buffer */
++#define BUF_AND_HASH (HASH_LEN + 64) /* length of the hash and other data to get size of buffer */
+ #define HASH_BUFLEN 8192	   /* 8192 seems to be a good balance between freads
+ 				    * and the digest func*/
+ static void
+@@ -1362,58 +1362,73 @@ tolocal(int argc, char **argv, enum scp_mode_e mode, char *sftp_direct)
+ #if (defined WITH_OPENSSL) && !defined(LIBRESSL_VERSION_NUMBER)
+ void calculate_hash(char *filename, char *output, off_t length)
+ {
+-	int n, md_len;
+-	EVP_MD_CTX *c;
++	int n, ok = 0;
++	unsigned int md_len = 0;
++	EVP_MD_CTX *c = NULL;
+ 	const EVP_MD *md;
+ 	char buf[HASH_BUFLEN];
+-	ssize_t bytes;
+ 	unsigned char out[EVP_MAX_MD_SIZE];
+-	char tmp[3];
+ 	FILE *file_ptr;
+-	*output = '\0';
++	size_t want, got;
++
++	/*
++	 * The protocol carries the hash in a fixed-width field, so the output
++	 * is always HASH_LEN characters. On any failure it is HASH_LEN '0'
++	 * characters, which keeps the record the right length and never
++	 * matches a real digest.
++	 */
++	memset(output, '0', HASH_LEN);
++	output[HASH_LEN] = '\0';
+ 
+ 	/* open file for calculating hash */
+ 	file_ptr = fopen(filename, "r");
+-	if (file_ptr==NULL)
+-	{
+-		if (verbose_mode) {
++	if (file_ptr == NULL) {
++		if (verbose_mode)
+ 			fprintf(stderr, "%s: error opening file %s\n", hostname, filename);
+-			/* file the expected output with spaces */
+-			snprintf(output, HASH_LEN, "%s",  " ");
+-		}
+ 		return;
+ 	}
+ 
+-	md = EVP_get_digestbyname("blake2b512");
+-	c = EVP_MD_CTX_new();
+-	EVP_DigestInit_ex(c, md, NULL);
++	if ((md = EVP_get_digestbyname("blake2b512")) == NULL ||
++	    (c = EVP_MD_CTX_new()) == NULL ||
++	    EVP_DigestInit_ex(c, md, NULL) != 1)
++		goto out;
+ 
+ 	while (length > 0) {
+-		if (length > HASH_BUFLEN)
+-			/* fread returns the number of elements read.
+-			 * in this case 1. Multiply by the length to get the bytes */
+-			bytes=fread(buf, HASH_BUFLEN, 1, file_ptr) * HASH_BUFLEN;
+-		else
+-			bytes=fread(buf, length, 1, file_ptr) * length;
+-		EVP_DigestUpdate(c, buf, bytes);
+-		length -= HASH_BUFLEN;
++		want = length > HASH_BUFLEN ? HASH_BUFLEN : (size_t)length;
++		got = fread(buf, 1, want, file_ptr);
++		/* A short read means the file is shorter than requested, or a
++		 * read error. Either way these bytes cannot be hashed. */
++		if (got != want)
++			goto out;
++		if (EVP_DigestUpdate(c, buf, got) != 1)
++			goto out;
++		length -= got;
+ 	}
+-	EVP_DigestFinal(c, out, &md_len);
+-	EVP_MD_CTX_free(c);
++	if (EVP_DigestFinal_ex(c, out, &md_len) != 1 ||
++	    md_len * 2 != HASH_LEN)
++		goto out;
+ 	/* convert the hash into a string */
+-	for(n=0; n < md_len; n++) {
+-		snprintf(tmp, 3, "%02x", out[n]);
+-		strncat(output, tmp, 3);
+-	}
++	for (n = 0; n < (int)md_len; n++)
++		snprintf(output + 2 * n, 3, "%02x", out[n]);
++	ok = 1;
+ #ifdef DEBUG
+ 	fprintf(stderr, "%s: HASH IS '%s' of length %ld\n", hostname, output, strlen(output));
+ #endif
++ out:
++	if (!ok) {
++		memset(output, '0', HASH_LEN);
++		output[HASH_LEN] = '\0';
++	}
++	EVP_MD_CTX_free(c);
+ 	fclose(file_ptr);
+ }
+ #else
+ void calculate_hash(char *filename, char *output, off_t length)
+ {
+-  /* empty function for builds without openssl or are using libressl */
++	/* Builds without openssl, or with libressl, cannot hash. Keep the
++	 * fixed-width field valid anyway. */
++	memset(output, '0', HASH_LEN);
++	output[HASH_LEN] = '\0';
+ }
+ #endif /* WITH_OPENSSL */
+ 
+@@ -2140,15 +2155,20 @@ sink(int argc, char **argv, const char *src)
+ 		fprintf(stderr, "%s: cp is %s\n", hostname, cp);
+ #endif
+ 		if (resume_flag && !dir_flag) {
+-			*remote_hashsum = '\0';
+-			int i;
+-			for (i = 0; i < HASH_LEN; i++) {
+-				strncat (remote_hashsum, cp++, 1);
+-			}
++			/*
++			 * The hash is a fixed-width field followed by a space and the
++			 * filename. Check that it is all there before reading it, so a
++			 * short line cannot make us read past the end of the record.
++			 */
++			if (strnlen(cp, HASH_LEN + 1) < HASH_LEN + 1)
++				SCREWUP("hash too short");
++			memcpy(remote_hashsum, cp, HASH_LEN);
++			remote_hashsum[HASH_LEN] = '\0';
++			cp += HASH_LEN;
+ #ifdef DEBUG
+ 			fprintf (stderr, "%s: '%s'\n", hostname, remote_hashsum);
+ #endif
+-			if (!cp || *cp++ != ' ')
++			if (*cp++ != ' ')
+ 				SCREWUP("hash not delimited");
+ 		}
+ #ifdef DEBUG

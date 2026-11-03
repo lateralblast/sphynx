@@ -1,0 +1,82 @@
+From a892c2cc1bed2ee7a910c053d8194a91c27d7cca Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] scp: release per-file resume state at the top of the loop
+
+np_tmp was freed only at the end of the loop body, so an early continue or an
+error left a stale temporary name for the next file to reuse or overwrite.
+Release the previous file's names at the top of every pass. Zero npstat
+before stat(), so the mode sent to the peer is not uninitialised stack data,
+and drop an unused stat() call.
+
+Changelog: sphynx 0.3.0
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ scp.c | 25 +++++++++++++++----------
+ 1 file changed, 15 insertions(+), 10 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index 16902afd8..43a7cd68e 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1947,7 +1947,7 @@ void
+ sink(int argc, char **argv, const char *src)
+ {
+ 	static BUF buffer;
+-	struct stat stb, cpstat, npstat;
++	struct stat stb, npstat;
+ 	BUF *bp;
+ 	off_t i;
+ 	size_t j, count;
+@@ -2016,6 +2016,15 @@ sink(int argc, char **argv, const char *src)
+ 
+ 	for (first = 1;; first = 0) {
+ 		bad_match_flag = 0; /* used in resume mode. */
++		/*
++		 * Resume state belongs to one file. Release the previous file's
++		 * names here, so that every path through the loop, including the
++		 * early continues, starts clean.
++		 */
++		free(np_tmp);
++		np_tmp = NULL;
++		free(np_rand);
++		np_rand = NULL;
+ #ifdef DEBUG
+ 		fprintf(stderr, "%s: At start of loop buf is %s\n", hostname, buf);
+ #endif
+@@ -2247,12 +2256,14 @@ sink(int argc, char **argv, const char *src)
+ 		}
+ 		omode = mode;
+ 		mode |= S_IWUSR;
+-		stat(cp, &cpstat);
+ 		xfer_size = size;
+ 		if (resume_flag) {
+ #ifdef DEBUG
+ 			fprintf(stderr, "%s: np is %s\n", hostname, np);
+ #endif
++			/* Start from a known state: stat() below leaves it untouched on
++			 * failure, and the mode is sent to the peer. */
++			memset(&npstat, 0, sizeof(npstat));
+ 			/* does the file exist and if it does it writable? */
+ 			if (stat(np, &npstat) == -1) {
+ #ifdef DEBUG
+@@ -2619,16 +2630,10 @@ modes_done:
+ 			fprintf (stderr, "%s: Sending null to remout.\n", hostname);
+ #endif
+ 			(void) atomicio(vwrite, remout, "", 1); }
+-		/* we are in resume mode and we have allocated memory for np_tmp */
+-		if (resume_flag && np_tmp != NULL) {
+-			free(np_tmp);
+-			np_tmp = NULL;
+-		}
+-		/* the temporary name is only used for one file */
+-		free(np_rand);
+-		np_rand = NULL;
+         }
+ done:
++	free(np_tmp);
++	free(np_rand);
+ 	for (n = 0; n < npatterns; n++)
+ 		free(patterns[n]);
+ 	free(patterns);

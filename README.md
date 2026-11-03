@@ -1,6 +1,6 @@
 # sphynx
 
-Version: 0.3.3
+Version: 0.3.6
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -11,6 +11,7 @@ Sphynx is a wrapper that builds HPN-SSH from source and packages it for target o
 - [Output](#output)
 - [Performance](#performance)
 - [Tuning the TCP stack](#tuning-the-tcp-stack)
+- [Patches](#patches)
 - [Build dependencies](#build-dependencies)
 - [Packaging details](#packaging-details)
 - [Tests](#tests)
@@ -27,7 +28,7 @@ sudo apt-get install -y autoconf automake make gcc dpkg-dev \
 sudo apt install ./dist/hpn-ssh_*.deb
 ```
 
-On Ubuntu 26.04 this produces `dist/hpn-ssh_10.6p1+hpn18.12.0+sphynx0.3.3-1~resolute1_amd64.deb`.
+On Ubuntu 26.04 this produces `dist/hpn-ssh_10.6p1+hpn18.12.0+sphynx0.3.6-1~resolute1_amd64.deb`.
 
 ## Command reference
 
@@ -72,12 +73,12 @@ hpn-ssh_<upstream>+sphynx<version>-1~<series>1_<arch>.deb
 The version string has three parts:
 
 ```
-OpenSSH_10.6p1_hpn18.12.0_sphynx0.3.3
+OpenSSH_10.6p1_hpn18.12.0_sphynx0.3.6
 ```
 
 - `OpenSSH_10.6p1` is the OpenSSH base in `sphynx-ssh/version.h`.
 - `_hpn18.12.0` is the HPN-SSH release.
-- `_sphynx0.3.3` is the sphynx version. It is `SSH_SPHYNX` in `sphynx-ssh/version.h`.
+- `_sphynx0.3.6` is the sphynx version. It is `SSH_SPHYNX` in `sphynx-ssh/version.h`.
 
 `hpnssh -V` and `hpnsshd -V` print the full string, and the SSH banner sent to peers contains it. `sphynx build` stops with an error if `SSH_SPHYNX` does not match the sphynx version, so the two cannot drift apart. When you bump the sphynx version, update `sphynx`, `README.md`, `CHANGELOG.md` and `sphynx-ssh/version.h` together.
 
@@ -93,49 +94,53 @@ HPN-SSH is faster than OpenSSH on a fast local network, and on long paths it can
 
 ### Default kernel settings
 
-Throughput of one connection, as the median of 3 runs. Ubuntu's default `net.ipv4.tcp_wmem` maximum is 4 MB. CPU is the client's user plus system time per GB transferred. Where the 3 runs differed a lot, the range is shown in brackets.
+Throughput of one connection, as the median of 3 runs. The maximum for `net.ipv4.tcp_wmem` was 4 MB on the Ubuntu 26.04 machine used for the tests. CPU is the client's user plus system time per GB transferred.
 
 | Path | Cipher | OpenSSH 10.6 | HPN-SSH | Ratio | CPU s/GB, OpenSSH | CPU s/GB, HPN-SSH |
 |---|---|---|---|---|---|---|
-| LAN | each side's default | 630 MB/s | 1119 MB/s | 1.78x | 1.79 | 1.59 |
-| LAN | chacha20-poly1305 (serial) | 644 MB/s | 957 MB/s | 1.49x | 1.76 | 1.30 |
-| LAN | aes256-ctr | 868 MB/s | 1095 MB/s | 1.26x | 1.34 | 1.35 |
-| LAN | aes256-gcm | 1256 MB/s | 1528 MB/s | 1.22x | 0.97 | 0.81 |
-| 50 ms | each side's default | 38 MB/s | 50 MB/s | 1.32x | 1.82 | 19.4 |
-| 50 ms | chacha20-poly1305 (serial) | 38 MB/s | 50 MB/s | 1.32x | 1.80 | 19.1 (1.9 to 19.1) |
-| 50 ms | aes256-ctr | 38 MB/s | 50 MB/s | 1.31x | 1.40 | 19.3 (13.5 to 19.4) |
-| 50 ms | aes256-gcm | 38 MB/s | 51 MB/s | 1.33x | 1.16 | 18.9 |
-| 100 ms | each side's default | 19 MB/s | 25 MB/s | 1.32x | 1.95 | 37.0 (2.5 to 37.0) |
-| 100 ms | chacha20-poly1305 (serial) | 19 MB/s | 25 MB/s | 1.31x | 1.89 | 36.7 (2.9 to 36.7) |
-| 100 ms | aes256-ctr | 19 MB/s | 25 MB/s | 1.30x | 1.47 | 37.0 (3.1 to 37.0) |
-| 100 ms | aes256-gcm | 19 MB/s | 25 MB/s | 1.32x | 1.28 | 36.7 |
+| LAN | each side's default | 632 MB/s | 1095 MB/s | 1.73x | 1.80 | 1.62 |
+| LAN | chacha20-poly1305 (serial) | 628 MB/s | 931 MB/s | 1.48x | 1.80 | 1.33 |
+| LAN | aes256-ctr | 839 MB/s | 1072 MB/s | 1.28x | 1.40 | 1.44 |
+| LAN | aes256-gcm | 1212 MB/s | 1356 MB/s | 1.12x | 1.01 | 0.96 |
+| 50 ms | each side's default | 38 MB/s | 50 MB/s | 1.32x | 1.84 | 3.30 |
+| 50 ms | chacha20-poly1305 (serial) | 38 MB/s | 50 MB/s | 1.32x | 1.84 | 3.10 |
+| 50 ms | aes256-ctr | 38 MB/s | 50 MB/s | 1.31x | 1.46 | 3.34 |
+| 50 ms | aes256-gcm | 38 MB/s | 50 MB/s | 1.33x | 1.14 | 2.68 |
+| 100 ms | each side's default | 19 MB/s | 25 MB/s | 1.31x | 1.87 | 2.91 |
+| 100 ms | chacha20-poly1305 (serial) | 19 MB/s | 25 MB/s | 1.31x | 1.87 | 2.91 |
+| 100 ms | aes256-ctr | 19 MB/s | 25 MB/s | 1.30x | 1.47 | 3.12 |
+| 100 ms | aes256-gcm | 19 MB/s | 25 MB/s | 1.32x | 1.20 | 2.64 |
 
-"Each side's default" is serial ChaCha20-Poly1305 for OpenSSH and the multithreaded ChaCha20-Poly1305 for HPN-SSH. On the LAN, HPN-SSH is 1.2 to 1.8 times faster on every cipher. The largest gain is for the default cipher, because the multithreaded version spreads the work over more than one core.
+"Each side's default" is serial ChaCha20-Poly1305 for OpenSSH and the multithreaded ChaCha20-Poly1305 for HPN-SSH. On the LAN, HPN-SSH is 1.1 to 1.7 times faster on every cipher. The largest gain is for the default cipher, because the multithreaded version spreads the work over more than one core.
 
 On the long paths both are held back, but by different limits. OpenSSH sits at its fixed 2 MB channel window (2 MB per round trip gives 40 MB/s at 50 ms and 20 MB/s at 100 ms). HPN-SSH grows its window, but the 4 MB kernel send buffer stops it from using a larger one.
 
 ### With a larger send buffer limit
 
-The same paths with `net.ipv4.tcp_wmem` raised to a 32 MB maximum (see [Tuning the TCP stack](#tuning-the-tcp-stack)). The throughput figures were measured with exactly that setting, over 3 runs. The CPU figures and the `aes256-ctr` rows come from an earlier pass with a 64 MB maximum, which gave the same throughput to within 1 MB/s.
+The two long paths with `net.ipv4.tcp_wmem` raised to a 32 MB maximum (see [Tuning the TCP stack](#tuning-the-tcp-stack)). Everything in this table was measured with exactly that setting, 3 runs each.
 
 | Path | Cipher | OpenSSH 10.6 | HPN-SSH | Ratio | CPU s/GB, OpenSSH | CPU s/GB, HPN-SSH |
 |---|---|---|---|---|---|---|
-| 50 ms | each side's default | 38 MB/s | 107 MB/s | 2.8x | 1.8 | 7.3 |
-| 50 ms | aes256-ctr | 38 MB/s | 106 MB/s | 2.8x | 1.4 | 8.8 |
-| 100 ms | each side's default | 19 MB/s | 99 MB/s | 5.2x | 1.9 | 8.8 |
-| 100 ms | aes256-ctr | 19 MB/s | 98 MB/s | 5.0x | 1.5 | 8.9 |
+| 50 ms | each side's default | 38 MB/s | 107 MB/s | 2.80x | 1.79 | 1.87 |
+| 50 ms | chacha20-poly1305 (serial) | 38 MB/s | 107 MB/s | 2.78x | 1.77 | 1.67 |
+| 50 ms | aes256-ctr | 38 MB/s | 106 MB/s | 2.76x | 1.40 | 1.80 |
+| 50 ms | aes256-gcm | 38 MB/s | 108 MB/s | 2.82x | 1.11 | 1.35 |
+| 100 ms | each side's default | 19 MB/s | 99 MB/s | 5.13x | 1.83 | 1.87 |
+| 100 ms | chacha20-poly1305 (serial) | 19 MB/s | 99 MB/s | 5.12x | 1.83 | 1.65 |
+| 100 ms | aes256-ctr | 19 MB/s | 98 MB/s | 5.03x | 1.44 | 1.77 |
+| 100 ms | aes256-gcm | 19 MB/s | 100 MB/s | 5.18x | 1.17 | 1.36 |
 
 OpenSSH does not improve, because its window is the limit. HPN-SSH reaches 78 to 86 percent of the 125 MB/s line rate of a 1 Gbit/s link.
 
 ### What to take from it
 
-- On a fast local network, HPN-SSH is faster and uses the same CPU per GB or less.
+- On a fast local network, HPN-SSH is faster and uses about the same CPU per GB or less.
 - On a long path, raise the TCP send buffer limit or HPN-SSH is limited by the kernel, not by itself.
-- **The HPN-SSH client sometimes uses far more CPU than OpenSSH on long paths.** With the default limit it spent about a full core for the whole transfer in 19 of 24 runs (about 19 CPU-seconds per GB at 50 ms and 37 at 100 ms). In 4 runs it used only 2 to 3, like OpenSSH, and in one it used 13.5. With the larger limit it was steady at 7 to 9. When it is busy, it wakes far more often than OpenSSH does. This is being investigated; see `TODO.md`.
+- **CPU:** with the default limit, the HPN-SSH client uses about 1 to 2 CPU-seconds per GB more than OpenSSH on the long paths (2.6 to 3.3 against 1.1 to 1.9). With the larger limit the two are within about 0.4 of each other (1.35 to 1.87 against 1.11 to 1.83). Before version 0.3.4 the HPN-SSH client spent about a full core on long paths, 19 to 37 CPU-seconds per GB, because its channel loop polled an input it could not read. That is fixed in patch 0016.
 
 ### How it was measured
 
-- **Software:** OpenSSH 10.6, built from the same upstream release HPN-SSH is based on, against HPN-SSH 0.3.0. Both were built from source with OpenSSL 3.5.
+- **Software:** OpenSSH 10.6, built from the same upstream release HPN-SSH is based on, against HPN-SSH 0.3.4. Both were built from source with OpenSSL 3.5.
 - **Network:** two Linux network namespaces joined by a virtual link on a 16-core machine. The delay and a 1 Gbit/s rate limit were added with `tc netem`, half of the round trip in each direction. The LAN case has no shaping. The test hosts were otherwise idle.
 - **Transfer:** one connection, one direction, 384 to 2048 MB of data from `/dev/zero` (768 MB for the larger-limit runs), sent with `dd if=/dev/zero | ssh host 'cat > /dev/null'`. No compression. The time to connect is measured separately and subtracted. The two implementations were run in turn, and the median of 3 runs is reported. The spread between runs was under 2 percent for the long paths.
 - **Not covered:** packet loss and jitter, scp and sftp, mixed pairs (an HPN-SSH client with an OpenSSH server or the reverse), and different numbers of cipher threads. These results show the effect of the buffer limit on an otherwise clean path, not what any real network will give you.
@@ -269,6 +274,76 @@ The script has tests in `tests/tune-tcp.sh`. The checks that change settings run
 - **Congestion control, packet loss and jitter** were not part of these measurements. A lossy path behaves differently from the clean path tested here.
 - **To undo it,** remove the file from `/etc/sysctl.d/` and set the old values back with `sysctl -w` (or reboot). `sysctl --system` reads the files that remain, but it does not reset a key whose file you removed.
 
+## Patches
+
+`sphynx-ssh/` is upstream HPN-SSH plus the changes sphynx has made to it. Those changes are kept as a series of patches in `patches/`, one per change, so they can be reviewed one at a time, sent upstream, and applied again to a newer HPN-SSH release.
+
+The series applies to this upstream commit, which is also in `patches/BASE`:
+
+```
+2c7cc5554  rapier1/hpn-ssh master, HPN-SSH 18.12.0 on OpenSSH 10.6
+```
+
+Apply the patches in order. Each one builds on its own, and each message says what was wrong, how it fails, and how it was checked.
+
+| Patch | Change | sphynx versions | For upstream |
+|---|---|---|---|
+| 0001 | `aes-ctr-mt`: keep each pregen thread's state in the cipher context. Removes a data race on a shared hash, a hash key that used 4 bytes of an 8-byte thread id, a NULL dereference on join, global thread and queue counts, a pointer to the caller's key, unchecked allocations, and an `exit` from a thread. | 0.0.4, 0.0.5, 0.0.6, 0.0.8, 0.0.9, 0.1.0 | yes |
+| 0002 | `aes-ctr-mt`: the same changes in the implementation for builds without OpenSSL 3. | 0.0.4 to 0.1.0, as 0001 | yes |
+| 0003 | `aes-ctr-mt`: destroy the queue locks after the threads are joined. | 0.0.7 | yes |
+| 0004 | `chachapoly-mt`: check the worker argument allocation. | 0.1.1 | yes |
+| 0005 | `aes-ctr-mt`: destroy the thread attributes after use. | 0.1.2 | yes |
+| 0006 | `scp`: build the `-Z` temporary name in its own buffer. Fixes a buffer overflow on the caller's argument string. | 0.2.1 | yes |
+| 0007 | `clientloop`: edit the command buffer in place when rewriting `scp` to `hpnscp`. Fixes a use after free and double free. | 0.2.2 | yes |
+| 0008 | `kex`: insert the serial ChaCha name after the MT entry in `patch_list`. Fixes a corrupted cipher proposal. | 0.2.3 | yes |
+| 0009 | `ssh`: do not disable the none switch for `-T`. | 0.2.4 | yes |
+| 0010 | `chachapoly-mt`: refuse packets longer than the pregenerated keystream. | 0.2.5 | yes |
+| 0011 | `scp`: reset the match status for each file in the sender. | 0.2.6 | yes |
+| 0012 | `scp`: report errors when joining the resumed tail. | 0.2.7 | yes |
+| 0013 | `scp`: validate the resume response in the sender. | 0.2.8 | yes |
+| 0014 | `scp`: check the hash field length and make `calculate_hash` fixed width. | 0.2.9 | yes |
+| 0015 | `scp`: release per-file resume state at the top of the loop. | 0.3.0 | yes |
+| 0016 | `channels`: arm the input fd only when it can be read. Fixes the client and server spinning at full CPU on long paths. | 0.3.4 | yes |
+| 0017 | `version`: add the sphynx version to the release string. | 0.0.3 | fork only |
+| 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
+
+Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
+
+### Apply, check and update
+
+```sh
+tools/patches.sh check              # do the patches apply to upstream and reproduce sphynx-ssh/?
+tools/patches.sh apply <checkout>   # apply them to a git checkout, for example a newer release
+tools/patches.sh base               # print the upstream commit the series applies to
+```
+
+`apply` uses `git am --3way`, so a patch that no longer applies cleanly falls back to a three-way merge.
+
+To move to a newer HPN-SSH release:
+
+```sh
+cd sphynx-ssh
+git fetch upstream --tags
+git checkout -b next <new upstream commit or tag>
+../tools/patches.sh apply .
+```
+
+If a patch does not apply, fix the conflict in the tree, `git add` the files and run `git am --continue`. If an upstream release has already fixed what a patch fixes, run `git am --skip` for it and say so in `CHANGELOG.md`. Then build, run the tests, and write the series out again:
+
+```sh
+git format-patch -N --no-signature -o ../patches <new upstream commit>..HEAD
+```
+
+Put the new commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, so regenerate it, and the series, whenever the sphynx version changes.
+
+### Sending a patch upstream
+
+Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork.
+
+### How the series was made
+
+The fixes were first made as edits to `sphynx-ssh/`. The series was then rebuilt on the upstream commit, one fix at a time, and `tools/patches.sh check` confirms that its end state is exactly the current `sphynx-ssh/`. The `sphynx build` command still builds from `sphynx-ssh/` and does not apply the patches itself.
+
 ## Build dependencies
 
 The build needs these packages. `sphynx build` checks for them first and prints the `apt-get` line for any that are missing.
@@ -307,6 +382,9 @@ packaging/ubuntu/           control template, maintainer scripts, systemd unit, 
 tests/run-tests.sh          test suite, with its C tests in tests/c/ and the scp -Z tests in tests/scp-resume.sh
 tools/perf/                 performance comparison of OpenSSH and HPN-SSH (see tools/perf/README.md)
 tools/tune-tcp.sh           applies the TCP buffer tuning described in this file
+tools/patches.sh            checks and applies the patch series in patches/
+HANDOFF.md                  current state and next steps, for picking the work up elsewhere
+patches/                    the changes sphynx makes to HPN-SSH, one patch each, applied to the commit in patches/BASE
 sphynx-ssh/                HPN-SSH fork used as the source (separate git repo, not tracked by sphynx)
 hpn-ssh/                    HPN-SSH clone (separate git repo, not used by default)
 openssh-portable/           upstream OpenSSH source (separate git repo, not tracked by sphynx)

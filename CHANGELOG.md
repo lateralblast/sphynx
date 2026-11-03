@@ -4,6 +4,29 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-03
+
+### Added
+
+- `patches/`, the changes sphynx makes to HPN-SSH as a series of 18 patches on top of upstream HPN-SSH (`patches/BASE` names the commit). Sixteen are bug fixes, each with a message that says what was wrong and how it was checked, and two are specific to this fork. See "Patches" in `README.md`.
+- `tools/patches.sh` checks that the series applies to the upstream commit and reproduces `sphynx-ssh/` (`check`), and applies it to any git checkout (`apply`), for example a newer HPN-SSH release.
+
+## [0.3.5] - 2026-11-03
+
+### Fixed
+
+- `tools/perf/perf.sh run` now starts every run from the host's own TCP limits. The test namespaces kept the `--wmem` and `--rmem` of an earlier run, so a run made without them could silently use the larger buffers of the run before it.
+
+## [0.3.4] - 2026-11-03
+
+### Fixed
+
+- `sphynx-ssh` `channels.c`: the HPN-SSH client and server could spin at full CPU during bulk transfers. Reading a channel's input is armed with `sshbuf_check_reserve()`, but the read itself (`channel_handle_rfd()`) only goes ahead when `sshbuf_avail()` is non-zero, and for channel input buffers `sshbuf_avail()` keeps about 1/21 of the buffer as headroom that `sshbuf_check_reserve()` does not know about. While the buffer sat in that headroom, `ppoll()` returned at once because the input was readable, the read was skipped, and the loop repeated until the send side drained the buffer. Arming now uses the same test as the read (`channel_input_can_read()`), in `channel_pre_open()` and `channel_pre_mux_client()`.
+
+### Changed
+
+- The `README.md` performance tables are measured again on 0.3.4, with the default TCP limits and with a 32 MB send buffer limit, and the CPU wording is corrected. Over 50 ms and 100 ms paths the HPN-SSH client now uses 1.8 to 3.3 CPU-seconds per GB, against 19 and 37 before, with unchanged throughput.
+
 ## [0.3.3] - 2026-11-03
 
 ### Added

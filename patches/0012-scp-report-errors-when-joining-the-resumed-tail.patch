@@ -1,0 +1,154 @@
+From bb7eb2ff6846a0b1ade538f67863ef483a28d168 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] scp: report errors when joining the resumed tail
+
+After a resumed transfer the received tail is appended to the existing file.
+A failed fopen(), fstat(), fwrite() or fclose() jumped to the cleanup, which
+deleted the temporary file holding the new data and reported success, leaving
+a truncated destination. The copy loop had no end-of-file or error check and
+could spin forever, and a tail that had not been fully written was appended
+anyway.
+
+Note each failure so it reaches the sender, restore the existing file to its
+original length if the append fails part way, end the loop at end of file, and
+do not append a tail that was not fully written. If the existing file cannot
+be reopened to set its mode, note that and go on to the response instead of
+sending a second reply.
+
+Changelog: sphynx 0.2.7
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ scp.c | 95 ++++++++++++++++++++++++++++++++---------------------------
+ 1 file changed, 51 insertions(+), 44 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index 3e5660aec..3aa287dfa 100644
+--- a/scp.c
++++ b/scp.c
+@@ -2487,66 +2487,72 @@ bad:			run_err("%s: %s", np, strerror(errno));
+ 			 hostname, resume_flag, np_tmp, bad_match_flag);
+ #endif
+ 		if (resume_flag && np_tmp && !bad_match_flag) {
+-			FILE *orig, *resume;
++			FILE *orig = NULL, *resume = NULL;
+ 			char res_buf[512]; /* set at 512 just because, might want to increase*/
+-			ssize_t res_bytes = 0;
+-			off_t sum = 0;
+-			struct stat res_stat;
+-			*res_buf = '\0';
+-			orig = NULL; /*supress warnings*/
+-			resume = NULL; /*supress warnings*/
++			size_t res_bytes;
++			int cat_ok = 0;
+ #ifdef DEBUG
+ 			fprintf(stderr, "%s: Resume flag is set. Going to concat %s to %s  now\n",
+ 				hostname, np, np_tmp);
+ #endif
+-			/* np/ofd is the resume file so open np_tmp for appending
+-			 * close ofd because we are going to be shifting it
+-			 * and I don't wnat the same file open in multiple descriptors */
++			/*
++			 * np is the temporary file holding the new tail. Append it to
++			 * the existing file (np_tmp) and then remove it. Close ofd first
++			 * so the same file is not open through two descriptors.
++			 */
+ 			if (close(ofd) == -1)
+ 				note_err("%s: close: %s", np, strerror(errno));
+-			/* orig is the target file, resume is the temp file */
+-			orig = fopen(np_tmp, "a"); /*open for appending*/
+-			if (orig == NULL) {
+-				fprintf(stderr, "%s: Could not open %s for appending.", hostname, np_tmp);
+-				goto stopcat;
++			ofd = -1;
++			if (wrerr) {
++				/*
++				 * The tail was not written completely. Appending it would
++				 * corrupt the existing file, so leave that alone. The error
++				 * has already been recorded.
++				 */
++			} else if ((orig = fopen(np_tmp, "a")) == NULL) {
++				note_err("%s: could not open for appending: %s",
++				    np_tmp, strerror(errno));
++			} else if ((resume = fopen(np, "r")) == NULL) {
++				note_err("%s: could not open for reading: %s",
++				    np, strerror(errno));
++			} else {
++				cat_ok = 1;
++				while ((res_bytes = fread(res_buf, 1, sizeof(res_buf),
++				    resume)) > 0) {
++					if (fwrite(res_buf, 1, res_bytes, orig) != res_bytes) {
++						note_err("%s: append: %s", np_tmp,
++						    strerror(errno));
++						cat_ok = 0;
++						break;
++					}
++				}
++				if (cat_ok && ferror(resume)) {
++					note_err("%s: read: %s", np, strerror(errno));
++					cat_ok = 0;
++				}
+ 			}
+-			resume = fopen(np, "r"); /*open for reading only*/
+-			if (resume == NULL) {
+-				fprintf(stderr, "%s: Could not open %s for reading.", hostname, np);
+-				goto stopcat;
++			if (resume != NULL)
++				fclose(resume);
++			if (orig != NULL && fclose(orig) != 0 && cat_ok) {
++				note_err("%s: close: %s", np_tmp, strerror(errno));
++				cat_ok = 0;
+ 			}
+-			/* get the number of bytes in the temp file*/
+-			if (fstat(fileno(resume), &res_stat) == -1) {
+-				fprintf(stderr, "%s: Could not stat %s", hostname, np);
+-				goto stopcat;
++			if (orig != NULL && !cat_ok) {
++				/* put the existing file back to the length it had */
++				if (truncate(np_tmp, npstat.st_size) != 0)
++					note_err("%s: restore: %s", np_tmp,
++					    strerror(errno));
+ 			}
+-			/* while the number of bytes read from the temp file
+-			 * is less than the size of the file read in a chunk and
+-			 * write it to the target file */
+-			do {
+-				res_bytes = fread(res_buf, 1, 512, resume);
+-				fwrite(res_buf, 1, res_bytes, orig);
+-				sum += res_bytes;
+-			} while (sum < res_stat.st_size);
+-
+-stopcat:		if (orig)
+-				fclose(orig);
+-			if (resume)
+-				fclose(resume);
+-			/* delete the resume file */
++			/* delete the temporary file */
+ 			remove(np);
+ #ifdef DEBUG
+ 			fprintf (stderr, "%s: np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
+ #endif
+ 			np = np_tmp;
+-#ifdef DEBUG
+-			fprintf (stderr, "%s np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
+-#endif
+-			/* reset ofd to the original np */
++			/* reopen the existing file so its mode can be set below */
+ 			if ((ofd = open(np_tmp, O_WRONLY)) == -1) {
+-				fprintf(stderr, "%s: couldn't open %s in append function\n", hostname, np_tmp);
+-				atomicio(vwrite, remout, "", 1);
+-				goto bad;
++				note_err("%s: %s", np_tmp, strerror(errno));
++				goto modes_done;
+ 			}
+ 		}
+ 		if (pflag) {
+@@ -2572,6 +2578,7 @@ stopcat:		if (orig)
+ 		}
+ 		if (close(ofd) == -1)
+ 			note_err("%s: close: %s", np, strerror(errno));
++modes_done:
+ 		(void) response();
+ 		if (showprogress)
+ 			stop_progress_meter();

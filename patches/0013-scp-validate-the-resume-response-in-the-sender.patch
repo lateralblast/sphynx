@@ -1,0 +1,173 @@
+From 5c68e713f2ba07f13eea2e682c58274a60a8a3e3 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] scp: validate the resume response in the sender
+
+The sender ignored the result of reading the resume response, parsed a stack
+buffer that was never initialised, only printed when a field was missing, and
+computed a negative transfer size if the remote claimed more data than the
+local file holds.
+
+Check the read, show the remote's error message if that is what arrived,
+check every field, and treat a remote size larger than the local file as a
+mismatch so the whole file is sent again. On the receiving side an
+unexpected "F" status is a protocol error instead of skipping the file's data.
+
+Changelog: sphynx 0.2.8
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ scp.c | 106 ++++++++++++++++++++++++++++++----------------------------
+ 1 file changed, 55 insertions(+), 51 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index 3aa287dfa..ac6f5bb62 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1600,7 +1600,14 @@ syserr:			run_err("%s: %s", name, strerror(errno));
+ 		fprintf(stderr, "%s: inbuf length %ld buf length %ld\n", hostname, strlen(inbuf), strlen(buf));
+ #endif
+ 		if (resume_flag) { /* get the hash response from the remote */
+-			(void) atomicio(read, remin, inbuf, BUF_AND_HASH - 1);
++			memset(inbuf, 0, sizeof(inbuf));
++			if (atomicio(read, remin, inbuf, BUF_AND_HASH - 1) !=
++			    BUF_AND_HASH - 1) {
++				/* the remote may have sent an error message instead */
++				if (inbuf[0] == '\001' || inbuf[0] == '\002')
++					fatal("%s: remote error: %.100s", name, inbuf + 1);
++				fatal("%s: lost connection reading resume response", name);
++			}
+ #ifdef DEBUG
+ 				fprintf(stderr, "%s: we got '%s' in inbuf length %ld buf was %ld\n",
+ 					hostname, inbuf, strlen(inbuf), strlen(buf));
+@@ -1619,73 +1626,71 @@ syserr:			run_err("%s: %s", name, strerror(errno));
+ 		if (resume_flag) {
+ 			cp = inbuf;
+ 			if (*cp == 'R') { /* resume file transfer*/
+-				char *in_hashsum; /* where to hold the incoming hash */
+-				in_hashsum = calloc(HASH_LEN+1, sizeof(char));
++				char in_hashsum[HASH_LEN+1]; /* where to hold the incoming hash */
+ 				for (++cp; cp < inbuf + 5; cp++) {
+ 					/* skip over the mode */
+ 				}
+-				if (*cp++ != ' ') {
+-					fprintf(stderr, "%s: mode not delineated!\n", hostname);
+-				}
+-
++				/* The response comes from the remote, so check every field. */
++				if (*cp++ != ' ')
++					fatal("%s: mode not delineated in resume response", name);
+ 				if (!isdigit((unsigned char)*cp))
+-					fprintf(stderr, "%s: size not present\n", hostname);
++					fatal("%s: size not present in resume response", name);
+ 				ull = strtoull(cp, &cp, 10);
+ 				if (!cp || *cp++ != ' ')
+-					fprintf(stderr, "%s: size not delimited\n", hostname);
+-				if (TYPE_OVERFLOW(off_t, ull))
+-					fprintf(stderr, "%s: size out of range\n", hostname);
+-				insize = (off_t)ull;
+-
+-#ifdef DEBUG
+-				fprintf (stderr, "%s: received size of %ld\n", hostname, insize);
+-#endif
+-
+-				/* copy the cp pointer byte by byte */
+-				int i;
+-				for (i = 0; i < HASH_LEN; i++) {
+-					strncat(in_hashsum, cp++, 1);
+-				}
++					fatal("%s: size not delimited in resume response", name);
++				if (strnlen(cp, HASH_LEN) < HASH_LEN)
++					fatal("%s: hash too short in resume response", name);
++				memcpy(in_hashsum, cp, HASH_LEN);
++				in_hashsum[HASH_LEN] = '\0';
++				cp += HASH_LEN;
+ #ifdef DEBUG
+ 				fprintf (stderr, "%s: in_hashsum '%s'\n", hostname, in_hashsum);
+ #endif
+-
+-				/*get the hash of the source file to the byte length we just got*/
+-				calculate_hash(name, test_hashsum, insize);
++				if (TYPE_OVERFLOW(off_t, ull) || (off_t)ull > stb.st_size) {
++					/*
++					 * The remote claims to have more than this file holds,
++					 * or the size is nonsense. The fragments cannot match,
++					 * so send the whole file again.
++					 */
++					match = "F";
++					xfer_size = stb.st_size;
++				} else {
++					insize = (size_t)ull;
+ #ifdef DEBUG
+-				fprintf(stderr, "%s: calculated hashsum of local %s to %ld is %s\n",
+-					hostname, last, insize, test_hashsum);
++					fprintf (stderr, "%s: received size of %ld\n", hostname, insize);
+ #endif
+-				/* compare the incoming hash to the hash of the local file*/
+-				if (strcmp(in_hashsum, test_hashsum) == 0) {
+-					/* the fragments match so we should seek to the appropriate place in the
+-					 * local file and set the remote file to append */
++					/*get the hash of the source file to the byte length we just got*/
++					calculate_hash(name, test_hashsum, insize);
+ #ifdef DEBUG
+-					fprintf(stderr, "%s: File fragments match\n", hostname);
+-					fprintf(stderr, "%s: seeking to %ld\n", hostname, insize);
++					fprintf(stderr, "%s: calculated hashsum of local %s to %ld is %s\n",
++						hostname, last, insize, test_hashsum);
+ #endif
+-					xfer_size = stb.st_size - insize;
++					/* compare the incoming hash to the hash of the local file*/
++					if (strcmp(in_hashsum, test_hashsum) == 0) {
++						/* the fragments match so we should seek to the appropriate place in the
++						 * local file and set the remote file to append */
+ #ifdef DEBUG
+-					fprintf(stderr, "%s: xfer_size: %ld, stb.st_size: %ld insize: %ld\n",
+-						hostname, xfer_size, stb.st_size, insize);
++						fprintf(stderr, "%s: File fragments match\n", hostname);
++						fprintf(stderr, "%s: seeking to %ld\n", hostname, insize);
+ #endif
+-					if (lseek(fd, insize, SEEK_CUR) != (off_t)insize) {
++						xfer_size = stb.st_size - insize;
++						if (lseek(fd, insize, SEEK_CUR) != (off_t)insize) {
+ #ifdef DEBUG
+-						fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
++							fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+ #endif
+-						goto next;
+-					}
+-					match = "M";
+-				} else {
+-					/* the fragments don't match so we should start over from the begining */
++							goto next;
++						}
++						match = "M";
++					} else {
++						/* the fragments don't match so we should start over from the begining */
+ #ifdef DEBUG
+-					fprintf(stderr, "%s: File fragments do not match '%s'(in) '%s'(local)\n",
+-				       		hostname, in_hashsum, test_hashsum);
++						fprintf(stderr, "%s: File fragments do not match '%s'(in) '%s'(local)\n",
++							hostname, in_hashsum, test_hashsum);
+ #endif
+-					match = "F";
+-					xfer_size = stb.st_size;
++						match = "F";
++						xfer_size = stb.st_size;
++					}
+ 				}
+-				free(in_hashsum);
+ 			}
+ 			if (*cp == 'S') { /* skip file */
+ #ifdef DEBUG
+@@ -2380,9 +2385,8 @@ sink(int argc, char **argv, const char *src)
+ #endif
+ 					if (np_tmp != NULL)
+ 						np = np_tmp;
+-					else {
+-						continue;
+-					}
++					else
++						SCREWUP("unexpected resume match status");
+ 				} else {
+ #ifdef DEBUG
+ 					fprintf(stderr, "%s: match received is NULL\n", hostname);

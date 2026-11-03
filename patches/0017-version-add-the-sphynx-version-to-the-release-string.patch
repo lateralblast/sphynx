@@ -1,0 +1,31 @@
+From 58dc2397639628f85ed75e28eb3de683feebfa30 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] version: add the sphynx version to the release string
+
+Fork-specific, not for upstream. SSH_SPHYNX is the version of the sphynx
+packaging, so the release string reads for example
+OpenSSH_10.6p1_hpn18.12.0_sphynx0.3.6. It is in the SSH banner, in
+"ssh -V", and matched by "Match version". sphynx build refuses to build if
+this tag and its own version disagree.
+
+Regenerate this patch when the sphynx version changes.
+
+Changelog: sphynx 0.0.3
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ version.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/version.h b/version.h
+index 0e40da38f..ff4e3fe8c 100644
+--- a/version.h
++++ b/version.h
+@@ -4,4 +4,5 @@
+ 
+ #define SSH_PORTABLE	"p1"
+ #define SSH_HPN         "_hpn18.12.0"
+-#define SSH_RELEASE	SSH_VERSION SSH_PORTABLE SSH_HPN
++#define SSH_SPHYNX      "_sphynx0.3.6"
++#define SSH_RELEASE	SSH_VERSION SSH_PORTABLE SSH_HPN SSH_SPHYNX

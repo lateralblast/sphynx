@@ -1,0 +1,32 @@
+From da399122d8bf0a8979fe45f43b7d123bb86855ca Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] chachapoly-mt: check the worker argument allocation
+
+The manager thread allocated the array of worker arguments with malloc() and
+dereferenced it without checking the result. Report the failure through the
+manager's retval, as the function already does for a batch miss.
+
+Changelog: sphynx 0.1.1
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cipher-chachapoly-libcrypto-mt.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/cipher-chachapoly-libcrypto-mt.c b/cipher-chachapoly-libcrypto-mt.c
+index 1c545b3c8..b91ddb37d 100644
+--- a/cipher-chachapoly-libcrypto-mt.c
++++ b/cipher-chachapoly-libcrypto-mt.c
+@@ -478,6 +478,11 @@ manager_thread(struct manager_thread_args * margs) {
+ 	struct worker_thread_args * wargs = malloc(NUMTHREADS * sizeof(*wargs));
+ 	int ti;
+ 
++	if (wargs == NULL) {
++		margs->retval = 1;
++		return margs;
++	}
++
+ 	for (ti = 0; ti < NUMTHREADS; ti++) {
+ 		wargs[ti].batchID = batchID;
+ 		wargs[ti].batch = batch;

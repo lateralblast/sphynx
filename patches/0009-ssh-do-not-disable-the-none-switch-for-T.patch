@@ -1,0 +1,46 @@
+From fa2efe579d29479325e12cf39ac5f1082fc0e8a5 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 3 Nov 2026 18:20:19 +1100
+Subject: [PATCH] ssh: do not disable the none switch for -T
+
+The none cipher is only allowed on sessions without a tty, and the comment
+says -T was meant to stop it on an interactive session. But -T asks for no
+tty, which is the case it is allowed in, so "ssh -T -oNoneSwitch=yes" always
+lost it. Disable it for -t instead, the interactive case.
+
+Changelog: sphynx 0.2.4
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ ssh.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/ssh.c b/ssh.c
+index a63712aa1..66bc709a9 100644
+--- a/ssh.c
++++ b/ssh.c
+@@ -878,6 +878,13 @@ main(int ac, char **av)
+ 				options.request_tty = REQUEST_TTY_FORCE;
+ 			else
+ 				options.request_tty = REQUEST_TTY_YES;
++			/*
++			 * ensure that the user doesn't try to backdoor a null cipher
++			 * switch on an interactive session, so explicitly disable it
++			 * no matter what. (-T asks for no tty, which is the case the
++			 * none cipher is allowed in, so it must not disable it.)
++			 */
++			options.none_switch = 0;
+ 			break;
+ 		case 'v':
+ 			if (debug_flag == 0) {
+@@ -1036,10 +1043,6 @@ main(int ac, char **av)
+ 			break;
+ 		case 'T':
+ 			options.request_tty = REQUEST_TTY_NO;
+-			/* ensure that the user doesn't try to backdoor a */
+-			/* null cipher switch on an interactive session */
+-			/* so explicitly disable it no matter what */
+-			options.none_switch=0;
+ 			break;
+ 		case 'o':
+ 			line = xstrdup(optarg);

@@ -168,8 +168,9 @@ usage: tools/perf/perf.sh run [options]
   --runs N         runs per case (default 3)
   --mb LIST        data sizes in MB as cond=MB pairs. Default: lan=2048,wan50=512,wan100=384,
                    and 512 for any other wanNN
-  --wmem "A B C"   set net.ipv4.tcp_wmem inside the test namespaces (not on the host)
-  --rmem "A B C"   set net.ipv4.tcp_rmem inside the test namespaces (not on the host)
+  --wmem "A B C"   set net.ipv4.tcp_wmem inside the test namespaces (not on the host).
+  --rmem "A B C"   set net.ipv4.tcp_rmem inside the test namespaces (not on the host).
+                   Without these, each run starts from the host's current values.
   --out FILE       CSV to write (default build/perf/results.csv)
 
 The link rate is 1gbit unless PERF_RATE is set (for example PERF_RATE=100mbit).
@@ -200,8 +201,11 @@ run_matrix() {
     [[ "$runs" =~ ^[1-9][0-9]*$ ]] || die "--runs must be a positive integer"
     net_exists || die "the test network is not up; run: tools/perf/perf.sh setup"
 
-    [ -n "$wmem" ] && net_sysctl net.ipv4.tcp_wmem "$wmem"
-    [ -n "$rmem" ] && net_sysctl net.ipv4.tcp_rmem "$rmem"
+    # Start every run from the host's own TCP limits. The namespaces keep a
+    # setting from an earlier run otherwise, and a result would then depend on
+    # what was run before it.
+    net_sysctl net.ipv4.tcp_wmem "${wmem:-$(sysctl -n net.ipv4.tcp_wmem)}"
+    net_sysctl net.ipv4.tcp_rmem "${rmem:-$(sysctl -n net.ipv4.tcp_rmem)}"
 
     local -a cond_list cipher_list
     IFS=, read -ra cond_list <<<"$conds"
