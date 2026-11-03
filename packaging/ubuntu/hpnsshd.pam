@@ -1,0 +1,38 @@
+# PAM configuration for the HPN-SSH service (hpnsshd).
+# Adapted from the Ubuntu openssh-server sshd PAM configuration.
+
+# Standard Un*x authentication.
+@include common-auth
+
+# Disallow non-root logins when /etc/nologin exists.
+account    required     pam_nologin.so
+
+# Standard Un*x authorization.
+@include common-account
+
+# Set the loginuid process attribute.
+session    required     pam_loginuid.so
+
+# Create a new session keyring.
+session    optional     pam_keyinit.so force revoke
+
+# Standard Un*x session setup and teardown.
+@include common-session
+
+# Print the message of the day upon successful login.
+session    optional     pam_motd.so  motd=/run/motd.dynamic
+session    optional     pam_motd.so noupdate
+
+# Print the status of the user's mailbox upon successful login.
+session    optional     pam_mail.so standard noenv
+
+# Set up user limits from /etc/security/limits.conf.
+session    required     pam_limits.so
+
+# Read environment variables from /etc/environment and
+# /etc/security/pam_env.conf.
+session    required     pam_env.so
+session    required     pam_env.so envfile=/etc/default/locale
+
+# Standard Un*x password updating.
+@include common-password

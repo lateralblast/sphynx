@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# sphynx - build HPN-SSH from source and package it for target operating systems.
+set -euo pipefail
+
+SPHYNX_VERSION="0.1.2"
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+TARGET="ubuntu"
+SOURCE_DIR="$ROOT_DIR/sphynx-ssh"
+OUT_DIR="$ROOT_DIR/dist"
+BUILD_DIR="$ROOT_DIR/build"
+JOBS="$(nproc 2>/dev/null || echo 1)"
+SERIES=""
+MAINTAINER="${SPHYNX_MAINTAINER:-sphynx <sphynx@localhost>}"
+
+die() {
+    echo "sphynx: error: $*" >&2
+    exit 1
+}
+
+log() {
+    echo "==> $*"
+}
+
+usage() {
+    cat <<EOF
+Usage: sphynx build [options]
+       sphynx --version
+       sphynx --help
+
+Build HPN-SSH from source and package it for a target operating system.
+
+Commands:
+  build              Compile HPN-SSH and write the package to --out
+
+Options for build:
+  --target NAME     Target to build for (default: ubuntu). Supported: ubuntu
+  --source DIR      HPN-SSH source tree (default: $ROOT_DIR/sphynx-ssh)
+  --out DIR         Directory for finished packages (default: $ROOT_DIR/dist)
+  --build-dir DIR   Scratch directory for builds (default: $ROOT_DIR/build)
+  --jobs N          Parallel make jobs (default: number of CPUs)
+  --series NAME     Ubuntu series codename used in the package version
+                    (default: VERSION_CODENAME from /etc/os-release)
+
+Global options:
+  -h, --help        Show this help and exit
+  -V, --version     Show the sphynx version and exit
+
+Environment:
+  SPHYNX_MAINTAINER  Maintainer field written into the package
+                     (default: "sphynx <sphynx@localhost>")
+EOF
+}
+
+# Run one build step with its output captured to a log file.
+# On failure, show the tail of the log and stop.
+run_step() {
+    local what="$1" logfile="$2"
+    shift 2
+    log "$what"
+    if ! "$@" >"$logfile" 2>&1; then
+        echo "sphynx: error: $what failed. Last lines of $logfile:" >&2
+        tail -n 30 "$logfile" >&2
+        exit 1
+    fi
+}
+
+parse_build_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --target|--source|--out|--build-dir|--jobs|--series)
+                [ $# -ge 2 ] || die "$1 needs a value"
+                case "$1" in
+                    --target) TARGET="$2" ;;
+                    --source) SOURCE_DIR="$2" ;;
+                    --out) OUT_DIR="$2" ;;
+                    --build-dir) BUILD_DIR="$2" ;;
+                    --jobs) JOBS="$2" ;;
+                    --series) SERIES="$2" ;;
+                esac
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                die "unknown option for build: $1 (try --help)"
+                ;;
+        esac
+    done
+
+    [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive integer"
+    SOURCE_DIR="$(realpath -m "$SOURCE_DIR")"
+    OUT_DIR="$(realpath -m "$OUT_DIR")"
+    BUILD_DIR="$(realpath -m "$BUILD_DIR")"
+}
+
+# Read the HPN-SSH version from its version.h.
+# Sets UPSTREAM_VERSION, e.g. 10.6p1+hpn18.12.0
+read_upstream_version() {
+    local hdr="$SOURCE_DIR/version.h" ssh_version portable hpn
+    [ -f "$hdr" ] || die "no version.h in $SOURCE_DIR (is --source an HPN-SSH tree?)"
+
+    ssh_version="$(sed -n 's/^#define SSH_VERSION[[:space:]]*"OpenSSH_\([^"]*\)".*/\1/p' "$hdr")"
+    portable="$(sed -n 's/^#define SSH_PORTABLE[[:space:]]*"\([^"]*\)".*/\1/p' "$hdr")"
+    hpn="$(sed -n 's/^#define SSH_HPN[[:space:]]*"_hpn\([^"]*\)".*/\1/p' "$hdr")"
+
+    [ -n "$ssh_version" ] && [ -n "$hpn" ] || die "could not read SSH_VERSION and SSH_HPN from $hdr"
+
+    local sphynx_tag
+    sphynx_tag="$(sed -n 's/^#define SSH_SPHYNX[[:space:]]*"_sphynx\([^"]*\)".*/\1/p' "$hdr")"
+    [ "$sphynx_tag" = "$SPHYNX_VERSION" ] \
+        || die "$hdr has SSH_SPHYNX \"_sphynx$sphynx_tag\" but sphynx is $SPHYNX_VERSION; set it to \"_sphynx$SPHYNX_VERSION\""
+
+    UPSTREAM_VERSION="${ssh_version}${portable}+hpn${hpn}"
+}
+
+MISSING_PKGS=()
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || MISSING_PKGS+=("$2")
+}
+
+require_header() {
+    [ -f "/usr/include/$1" ] || MISSING_PKGS+=("$2")
+}
+
+check_ubuntu_prereqs() {
+    require_cmd autoconf autoconf
+    require_cmd automake automake
+    require_cmd make make
+    require_cmd gcc gcc
+    require_cmd dpkg-deb dpkg
+    require_cmd dpkg-shlibdeps dpkg-dev
+    require_header openssl/ssl.h libssl-dev
+    require_header zlib.h zlib1g-dev
+    require_header security/pam_appl.h libpam0g-dev
+
+    if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+        die "missing build dependencies. Install with: sudo apt-get install -y ${MISSING_PKGS[*]}"
+    fi
+}
+
+resolve_series() {
+    if [ -z "$SERIES" ]; then
+        # shellcheck source=/dev/null
+        SERIES="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+    fi
+    [ -n "$SERIES" ] || die "could not determine the Ubuntu series; pass --series NAME"
+}
+
+build_ubuntu() {
+    check_ubuntu_prereqs
+    read_upstream_version
+    resolve_series
+
+    [ -d "$SOURCE_DIR" ] || die "source directory not found: $SOURCE_DIR"
+
+    local work="$BUILD_DIR/ubuntu"
+    local src="$work/src"
+    local root="$work/root"
+    local arch deb_version depends installed_size deb_file
+    local shlibs_dir="$work/shlibs"
+    local -a exec_args=() bins=()
+    local f
+
+    rm -rf "$work"
+    mkdir -p "$src" "$root" "$OUT_DIR"
+
+    log "Staging a copy of $SOURCE_DIR (the source repo is not modified)"
+    (cd "$SOURCE_DIR" && tar --exclude=.git -cf - .) | tar -C "$src" -xf -
+    cd "$src"
+
+    run_step "Generating configure script" "$work/autoreconf.log" autoreconf -f -i
+    run_step "Configuring" "$work/configure.log" ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --libexecdir=/usr/lib/hpnssh \
+        --with-privsep-path=/run/hpnsshd \
+        --with-privsep-user=hpnsshd \
+        --with-pam
+    run_step "Compiling with $JOBS jobs" "$work/make.log" make -j"$JOBS"
+    run_step "Installing into staging root (no host keys)" "$work/install.log" \
+        make install-nokeys DESTDIR="$root"
+
+    # make install creates the privsep directory in the staging root. systemd
+    # creates it at runtime (RuntimeDirectory=), so it must not be packaged.
+    rm -rf "$root/run"
+
+    log "Adding systemd unit, PAM service and maintainer scripts"
+    install -Dm644 "$ROOT_DIR/packaging/ubuntu/hpnsshd.service" "$root/lib/systemd/system/hpnsshd.service"
+    install -Dm644 "$ROOT_DIR/packaging/ubuntu/hpnsshd.pam" "$root/etc/pam.d/hpnsshd"
+    install -dm755 "$root/DEBIAN"
+    for f in postinst prerm postrm; do
+        install -m755 "$ROOT_DIR/packaging/ubuntu/$f" "$root/DEBIAN/$f"
+    done
+    install -m644 "$ROOT_DIR/packaging/ubuntu/conffiles" "$root/DEBIAN/conffiles"
+
+    # Work out runtime library dependencies from the binaries we ship.
+    while IFS= read -r f; do
+        if [ "$(head -c4 "$f")" = $'\177ELF' ]; then
+            bins+=("$f")
+            exec_args+=("-e$f")
+        fi
+    done < <(find "$root/usr" -type f)
+    [ ${#bins[@]} -gt 0 ] || die "no ELF binaries were installed; the install step is wrong"
+
+    mkdir -p "$shlibs_dir/debian"
+    printf 'Source: hpn-ssh\n\nPackage: hpn-ssh\nArchitecture: any\nDescription: placeholder\n placeholder\n' \
+        >"$shlibs_dir/debian/control"
+    depends="$(cd "$shlibs_dir" && dpkg-shlibdeps -O "${exec_args[@]}" 2>"$work/shlibdeps.log" \
+        | sed -n 's/^shlibs:Depends=//p')"
+    [ -n "$depends" ] || die "dpkg-shlibdeps found no dependencies; see $work/shlibdeps.log"
+    depends="$depends, adduser, init-system-helpers (>= 1.54), libpam-modules, libpam-runtime"
+
+    arch="$(dpkg --print-architecture)"
+    deb_version="${UPSTREAM_VERSION}+sphynx${SPHYNX_VERSION}-1~${SERIES}1"
+    installed_size="$(du -sk --exclude=DEBIAN "$root" | cut -f1)"
+
+    local control
+    control="$(cat "$ROOT_DIR/packaging/ubuntu/control.in")"
+    control="${control//@VERSION@/$deb_version}"
+    control="${control//@ARCH@/$arch}"
+    control="${control//@MAINTAINER@/$MAINTAINER}"
+    control="${control//@INSTALLED_SIZE@/$installed_size}"
+    control="${control//@DEPENDS@/$depends}"
+    printf '%s\n' "$control" >"$root/DEBIAN/control"
+
+    deb_file="$OUT_DIR/hpn-ssh_${deb_version}_${arch}.deb"
+    run_step "Building $deb_file" "$work/dpkg-deb.log" \
+        dpkg-deb --root-owner-group --build "$root" "$deb_file"
+
+    log "Built $deb_file"
+    echo "    Install with: sudo apt install $deb_file"
+}
+
+run_build() {
+    parse_build_args "$@"
+    case "$TARGET" in
+        ubuntu) build_ubuntu ;;
+        *) die "unsupported target '$TARGET' (supported: ubuntu)" ;;
+    esac
+}
+
+main() {
+    [ $# -gt 0 ] || { usage; exit 2; }
+    case "$1" in
+        -h|--help) usage ;;
+        -V|--version) echo "sphynx $SPHYNX_VERSION" ;;
+        build) shift; run_build "$@" ;;
+        *) die "unknown command: $1 (try --help)" ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,4 @@
+/etc/hpnssh/ssh_config
+/etc/hpnssh/sshd_config
+/etc/hpnssh/moduli
+/etc/pam.d/hpnsshd

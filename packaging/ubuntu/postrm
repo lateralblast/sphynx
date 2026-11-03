@@ -1,0 +1,24 @@
+#!/bin/sh
+# postrm for hpn-ssh: clean up host keys and the privsep user on purge.
+set -e
+
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+        fi
+        ;;
+    purge)
+        rm -f /etc/hpnssh/ssh_host_*_key /etc/hpnssh/ssh_host_*_key.pub
+        if getent passwd hpnsshd >/dev/null; then
+            deluser --quiet --system hpnsshd >/dev/null || true
+        fi
+        deb-systemd-helper purge hpnsshd.service >/dev/null || true
+        deb-systemd-helper unmask hpnsshd.service >/dev/null || true
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

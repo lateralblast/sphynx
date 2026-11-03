@@ -1,0 +1,13 @@
+#!/bin/sh
+# prerm for hpn-ssh: stop the service before removal.
+set -e
+
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop hpnsshd.service >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

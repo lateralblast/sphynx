@@ -1,0 +1,14 @@
+Package: hpn-ssh
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Installed-Size: @INSTALLED_SIZE@
+Depends: @DEPENDS@
+Section: net
+Priority: optional
+Homepage: https://github.com/rapier1/hpn-ssh
+Description: HPN-SSH high performance OpenSSH client and server
+ HPN-SSH is OpenSSH with high performance patches applied. It installs
+ alongside OpenSSH: the programs are named hpnssh, hpnscp, hpnsshd and so
+ on, and configuration lives in /etc/hpnssh. The server listens on port
+ 2222 by default.

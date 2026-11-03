@@ -1,0 +1,36 @@
+#!/bin/sh
+# postinst for hpn-ssh: create the privilege separation user, generate any
+# missing host keys, and manage the hpnsshd service.
+set -e
+
+case "$1" in
+    configure)
+        if ! getent passwd hpnsshd >/dev/null; then
+            adduser --system --group --home /run/hpnsshd --no-create-home \
+                --shell /usr/sbin/nologin --gecos "HPN-SSH privsep" hpnsshd
+        fi
+
+        # Generates only the host key types that are missing; existing keys
+        # are never overwritten.
+        /usr/bin/hpnssh-keygen -A
+
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+        fi
+        deb-systemd-helper unmask hpnsshd.service >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled hpnsshd.service; then
+            deb-systemd-helper enable hpnsshd.service >/dev/null || true
+        else
+            deb-systemd-helper update-state hpnsshd.service >/dev/null || true
+        fi
+        if [ -d /run/systemd/system ]; then
+            if [ -n "$2" ]; then
+                deb-systemd-invoke try-restart hpnsshd.service >/dev/null || true
+            else
+                deb-systemd-invoke start hpnsshd.service >/dev/null || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0
