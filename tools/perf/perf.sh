@@ -123,7 +123,7 @@ write_configs() {
     mkdir -p "$WORK"
     [ -f "$WORK/id" ] || ssh-keygen -q -t ed25519 -N "" -f "$WORK/id"
     [ -f "$WORK/host_key" ] || ssh-keygen -q -t ed25519 -N "" -f "$WORK/host_key"
-    local name port sftp_server
+    local name port sftp_server out
     for name in base hpn; do
         port=$BASE_PORT; sftp_server=$BASE_SFTP_SERVER
         [ "$name" = hpn ] && { port=$HPN_PORT; sftp_server=$HPN_SFTP_SERVER; }
@@ -139,6 +139,12 @@ StrictModes no
 PidFile $WORK/sshd_$name.pid
 Subsystem sftp $sftp_server
 CFG
+        # a build without PAM (a build tree rather than the package) rejects UsePAM
+        local bin="$BASE_SSHD"; [ "$name" = hpn ] && bin="$HPN_SSHD"
+        if [ -x "$bin" ] && out="$("$bin" -t -f "$WORK/sshd_$name.conf" 2>&1)" ; then :
+        elif grep -q 'Unsupported option UsePAM' <<<"${out:-}"; then
+            sed -i '/^UsePAM no$/d' "$WORK/sshd_$name.conf"
+        fi
     done
 }
 
@@ -230,14 +236,17 @@ client_run() {
                 "$mb" "$ssh_bin" -p "$port" "${common[@]}" "$SRV_IP"
         fi ;;
     scp)
+        # PERF_SCP_OPTS is a list of extra scp options, split into words on purpose
+        # shellcheck disable=SC2086
         /usr/bin/time -f "%e %U %S" -o "$tf" "$scp_bin" -S "$ssh_bin" -P "$port" \
-            "${common[@]}" "$file" "$SRV_IP:/dev/null" ;;
+            ${PERF_SCP_OPTS:-} "${common[@]}" "$file" "$SRV_IP:/dev/null" ;;
     sftp)
-        # the pipeline is for the inner shell, so the single quotes are meant
-        # shellcheck disable=SC2016
+        # the pipeline is for the inner shell, so the single quotes are meant.
+        # PERF_SFTP_OPTS is a list of extra sftp options, split into words on purpose
+        # shellcheck disable=SC2016,SC2086
         /usr/bin/time -f "%e %U %S" -o "$tf" bash -c \
             'printf "put %s /dev/null\n" "$0" | "$@"' \
-            "$file" "$sftp_bin" -S "$ssh_bin" -P "$port" "${common[@]}" -b - "$SRV_IP" ;;
+            "$file" "$sftp_bin" -S "$ssh_bin" -P "$port" ${PERF_SFTP_OPTS:-} "${common[@]}" -b - "$SRV_IP" ;;
     *) exit 2 ;;
     esac
     cat "$tf"
@@ -259,6 +268,10 @@ usage: tools/perf/perf.sh run [options]
   --pairs LIST     comma list of CLIENT:SERVER, each base (OpenSSH) or hpn (HPN-SSH).
                    hpn:base is an HPN-SSH client against an OpenSSH server.
                    Default: base:base,hpn:hpn
+  --sftp-opts STR  extra options for sftp, for example "-B 262144 -R 128" (the request size
+                   and the number of requests in flight). It is part of the tool name in
+                   the CSV, as sftp(-B_262144_-R_128).
+  --scp-opts STR   extra options for scp, for example "-X nrequests=128 -X copy_buffer=262144".
   --threads LIST   comma list of SSH_CIPHER_THREADS values, each a number or "default"
                    (unset). It only affects the AES-CTR ciphers (*-ctr) when HPN-SSH is
                    on either side; every other case runs once. Default: default
@@ -294,7 +307,7 @@ make_data() { # MB: a file of zeros, made once
 run_matrix() {
     local conds=lan,wan50,wan100 tools=ssh pairs=base:base,hpn:hpn threads=default
     local ciphers=default,chacha20-poly1305@openssh.com,aes256-ctr,aes256-gcm@openssh.com
-    local runs=3 out="$WORK/results.csv" wmem="" rmem="" dry=0
+    local runs=3 out="$WORK/results.csv" wmem="" rmem="" dry=0 sftp_opts="" scp_opts=""
     local -A mb=([lan]=2048 [wan50]=512 [wan100]=384)
     local pair
     while [ $# -gt 0 ]; do
@@ -303,6 +316,8 @@ run_matrix() {
             --tools) tools="${2:?}"; shift 2 ;;
             --pairs) pairs="${2:?}"; shift 2 ;;
             --threads) threads="${2:?}"; shift 2 ;;
+            --sftp-opts) sftp_opts="${2:?}"; shift 2 ;;
+            --scp-opts) scp_opts="${2:?}"; shift 2 ;;
             --ciphers) ciphers="${2:?}"; shift 2 ;;
             --runs) runs="${2:?}"; shift 2 ;;
             --mb) IFS=, read -ra mbpairs <<<"${2:?}"
@@ -354,12 +369,20 @@ run_matrix() {
     local user cond cipher size client server thr ti tool label e u s
     user="$(id -un)"
 
+    # the tool's name in the CSV: the extra options are part of it
+    tool_label() {
+        local o=""
+        case "$1" in sftp) o="$sftp_opts" ;; scp) o="$scp_opts" ;; esac
+        if [ -n "$o" ]; then echo "$1(${o// /_})"; else echo "$1"; fi
+    }
+
     one() { # tool client server cipher mb threads -> "elapsed user sys"
         local -a envargs=(-u SSH_CIPHER_THREADS)
         [[ "$6" =~ ^[0-9]+$ ]] && envargs=("SSH_CIPHER_THREADS=$6")
         timeout 900 sudo ip netns exec "$CLI_NS" sudo -u "$user" env "${envargs[@]}" \
             "BASELINE_PREFIX=$BASELINE_PREFIX" "BASELINE_SSH=$BASE_SSH" "BASELINE_SCP=$BASE_SCP" \
             "BASELINE_SFTP=$BASE_SFTP" "HPN_SSH=$HPN_SSH" "HPN_SCP=$HPN_SCP" "HPN_SFTP=$HPN_SFTP" \
+            "PERF_SFTP_OPTS=$sftp_opts" "PERF_SCP_OPTS=$scp_opts" \
             "PERF_WORK=$WORK" "$SELF" _client "$@" | tail -1
     }
 
@@ -374,7 +397,7 @@ run_matrix() {
         if [ "$dry" = 1 ]; then
             for entry in "$@"; do
                 IFS=: read -r c sv lab <<<"$entry"
-                echo "case tool=$tool client=$c server=$sv cipher=$cipher cond=$cond mb=$size threads=$lab runs=$runs"
+                echo "case tool=$(tool_label "$tool") client=$c server=$sv cipher=$cipher cond=$cond mb=$size threads=$lab runs=$runs"
             done
             return 0
         fi
@@ -385,7 +408,7 @@ run_matrix() {
                 e="" u="" s=""
                 read -r e u s < <(one "$tool" "$c" "$sv" "$use" "$size" "$thr" || true)
                 [ -n "$e" ] || echo "perf: warning: $tool $c:$sv $cipher $cond failed (run $run)" >&2
-                echo "$c,$cipher,$cond,$run,$size,${e:-nan},${u:-nan},${s:-nan},$tool,$sv,$lab" >>"$out"
+                echo "$c,$cipher,$cond,$run,$size,${e:-nan},${u:-nan},${s:-nan},$(tool_label "$tool"),$sv,$lab" >>"$out"
             done
         done
     }

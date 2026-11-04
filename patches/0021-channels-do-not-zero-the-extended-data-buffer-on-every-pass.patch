@@ -16,6 +16,11 @@ put 5.2 percent of the process's samples in that memset, under
 channel_handle_efd_read(), and the total memset share fell from 8.5 to 4.8
 percent with this change. Throughput did not change in the loopback test,
 which the sending side limits, so this saves server CPU rather than speed.
+
+Measured over 5 transfers of 4 GB per cipher, server user plus system CPU per
+GB fell from 1.846 to 1.775 s with aes256-gcm (3.8 percent), from 2.690 to
+2.602 s with chacha20-poly1305-mt (3.3 percent) and from 2.886 to 2.853 s with
+aes256-ctr (1.2 percent, probably within the noise).
 ---
  channels.c | 9 ++++++++-
  1 file changed, 8 insertions(+), 1 deletion(-)

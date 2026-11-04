@@ -4,6 +4,16 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-11-04
+
+### Changed
+
+- The README's Performance section is reorganised. It opens with a summary table of the questions the measurements answer, and the sections follow in themes: against OpenSSH on a clean path, packet loss and congestion control (loss, jitter and the other TCP settings together, with one set of conclusions), ciphers and MACs, where the time goes, and the settings that made no difference (cipher threads, rekeying, OpenSSL version, packet size), then macOS. Out-of-date statements are corrected (the version strings in the examples, `tune-tcp.sh` not setting the congestion control, loss and jitter "not covered"), and first-person wording is removed.
+
+### Added
+
+- The README gives the server CPU that patch 0021 saves: 0.07 CPU-seconds per GB with `aes256-gcm` (3.8 percent), 0.09 with the multithreaded ChaCha (3.3 percent) and 0.03 with `aes256-ctr` (1.2 percent, probably noise), over 5 transfers of 4 GB per cipher. The figures are also in the patch's commit message and the patch table.
+
 ## [0.5.8] - 2026-11-04
 
 ### Added
