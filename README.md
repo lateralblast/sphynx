@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 0.6.1
+Version: 0.8.2
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -109,9 +109,10 @@ HPN-SSH is faster than OpenSSH on a fast local network, and on long paths it can
 | On a lossy or jittery path? | `bbr` kept its clean-link speed; `cubic` lost 15 to 62 percent or stalled. | [Packet loss and congestion control](#packet-loss-and-congestion-control) |
 | Which cipher? | AES-GCM leads the default multithreaded ChaCha by 5 to 6 percent on CPUs with AES instructions; the top four are within about 10 percent. | [Cipher choice](#cipher-choice-end-to-end), [Choosing a cipher and MAC](#choosing-a-cipher-and-mac) |
 | Which MAC? | The default, `umac-64-etm`, is already the fastest. | [Choice of MAC](#choice-of-mac) |
+| Does `Compression yes` help? | With zlib, only on a slow link (100 Mbit/s or less) with compressible data, and then by 1.5 times; it sends 65 percent at best (Huffman-only) and slows a fast link by 38 percent or more. Patch 0022's `huff0@hpnssh.org` method sends the same 65 percent at a quarter of the CPU: 39 percent faster than no compression at 1 Gbit/s over 50 ms, still slower on a LAN. Compressing with `zstd` first is 3.5 to 4 times faster on slow links. | [Compression](#compression) |
 | What limits a connection on a fast LAN? | The sending thread: about 85 percent of it is the kernel and the cipher. | [Where the time goes](#where-the-time-goes) |
 | What made no difference? | More cipher threads, rekeying, OpenSSL 3.5 against 4.1, 64 KiB packets, other TCP settings, the hardening flags. | [Settings that made no difference](#settings-that-made-no-difference) |
-| What did the work in this repository change? | Patch 0019: `aes256-ctr` 4 to 7 percent faster. Patch 0021: 1 to 4 percent less server CPU. Patch 0020 fixes a crash, not speed. `tools/tune-tcp.sh --cc` and `tools/suggest-cipher.sh` apply the findings. | [Patches](#patches) |
+| What did the work in this repository change? | Patch 0019: `aes256-ctr` 4 to 7 percent faster. Patch 0021: 1 to 4 percent less server CPU. Patch 0022: a faster compression method, 2.5 times zlib's speed at 1 Gbit/s over 50 ms. Patch 0020 fixes a crash, not speed. `tools/tune-tcp.sh --cc` and `tools/suggest-cipher.sh` apply the findings. | [Patches](#patches) |
 
 All of it is loopback or emulated networks (namespaces with `tc netem`). Nothing was measured over a real wide-area link. The machines: a 16-core amd64 machine (the comparison with OpenSSH), a 20-core Intel Xeon E5-2630 v4 Ubuntu 26.04 server, a 9-core Ubuntu 26.04 arm64 virtual machine and a 10-core Apple M1 Max Mac.
 
@@ -332,6 +333,85 @@ With `aes256-ctr` the connection also needs a MAC (the AEAD ciphers `aes256-gcm`
 - If you must use `hmac-sha2-256` for policy, expect about a quarter less throughput than the default on a fast link. On a link below a few hundred MB/s none of this matters.
 - Loopback only: the client and server share CPUs, and a long path is limited by the buffers, not the MAC.
 - To get a suggestion for your own CPU, see [Choosing a cipher and MAC](#choosing-a-cipher-and-mac).
+
+### Compression
+
+`Compression yes` (`hpnssh -C`) does less than its name suggests: in this code the compressor is zlib set to its fastest level with the **Huffman-only strategy** (`deflateInit2(..., Z_BEST_SPEED, Z_DEFLATED, 15, 8, Z_HUFFMAN_ONLY)` in `packet.c`). That codes each byte on its own and does no string matching, so it cannot do better than 8 to 1 (a bit per byte) however repetitive the data is. Ubuntu's OpenSSH 10.2 does the same. Measured with SSH's own byte counter, 20 MB of zeros became 2.5 MB, one line repeated 20 MB worth became 12 MB, and 20 MB of log text that `gzip -6` shrinks to 24 percent became 64 percent. A `strace` of the client showed each 32 KiB packet of zeros leaving as 4164 bytes.
+
+**Why it is Huffman-only.** It is deliberate, and it is a security fix from OpenSSH, not a speed choice. OpenSSH commit `1d5340fce` (22 September 2026, by `job@openbsd.org`, OK `djm@` and `dtucker@`) changed `start_compression_out` from `deflateInit(..., level 6)` to the call above. Its message says a chosen-plaintext attack can recover secrets from one channel by sending data through another channel of the same session. All channels share one compression dictionary, and LZ77 replaces repeated strings with back-references into it, so attacker-controlled input changes the length of the encrypted packets in a way that reveals whether it matched a secret. It cites Bäumer and Brinkmann, "Crossing the Streams: SSH Plaintext Recovery via a Common Compression Context in Multiplexed Channels" (arXiv 2609.07709). Huffman coding has no dictionary, so it avoids this, and the message admits "this results in a reduction of compression effectiveness". The `ssh_config(5)` page already advised against compression on connections that carry trusted and untrusted traffic. This fork inherits the change from upstream, with no edit of its own. The Ubuntu OpenSSH 10.2 measured above gave the same 65 percent, so Ubuntu has presumably backported the fix; I did not check its changelog.
+
+**A faster coder with no dictionary.** zlib's Huffman-only mode is slow for what it does, because it still runs the whole deflate machinery. `huff0`, the Huffman coder inside zstd, does the same job with the same kind of code (order 0, no history, a fresh table for each 32 KiB packet, so no state is shared between packets or channels). Compressing the same 64 MiB of log text and of random data in 32 KiB packets with `tools/perf/huff0-bench.c` (zstd 1.5.7, one thread, in memory, no SSH):
+
+| Machine and data | zlib Huffman-only | `huff0` | zlib level 6, with dictionary (for reference) |
+|---|---|---|---|
+| x86-64 Xeon E5-2630 v4, log text: size sent | 64.2% | 64.0% | 23.8% |
+| x86-64, log text: compress / decompress MB/s | 78 / 217 | 615 / 821 | 37 / 291 |
+| x86-64, random data: compress MB/s | 100 | 1918 | 39 |
+| M1 Max, log text: compress / decompress MB/s | 148 / 446 | 1407 / 1601 | 55 / 885 |
+| M1 Max, random data: compress MB/s | 192 | 4228 | 58 |
+
+- The ratio is the same, so a dictionary-free coder gives the same 35 percent saving. It compresses 8 to 10 times faster on log text, and 19 to 22 times faster on random data, because `huff0` notices it cannot shrink a packet and stores it. The `huff0` decompress figure includes a byte-for-byte check of the result, so it is understated.
+- At 78 MB/s the x86 server spends about 13 CPU-seconds per GB compressing with zlib; at 615 MB/s it would spend about 1.6. That is the cost that made `Compression yes` slow a 1 Gbit/s connection by 38 to 46 percent. These figures are in-memory and single-threaded and leave out the cipher, the kernel and the network, so they show the compressor alone and do not predict an SSH transfer.
+- It does not make compression better than the 64 percent that Huffman coding allows. That needs the dictionary the security fix removed.
+- Using it needs a new compression method in the SSH protocol that both ends support, since the compression name is negotiated, and part of zstd copied into the tree (`huff0` is not a public interface of the library). Patch 0022 does both, as [below](#the-huff0hpnsshorg-method).
+
+#### The huff0@hpnssh.org method
+
+Patch 0022 adds it as a compression method named `huff0@hpnssh.org`, next to `none` and `zlib@openssh.com`. `hpnssh -Q compression` lists it.
+
+- **Wire format.** Each packet's payload is split into blocks of up to 128 KiB, and each block is `huff0`-coded with a table of its own, or stored if that would not make it smaller. Nothing is kept from one packet to the next, so there is still no dictionary and no state shared between channels. The format is written at the top of `compress-huff0.c`.
+- **Negotiation.** With `Compression yes` the client lists `huff0@hpnssh.org` first, then `zlib@openssh.com`, then `none`. With `Compression no` it lists `none` first, as before, and `hpnsshd` accepts all three, so nothing changes unless compression is asked for. The server takes the first name in the client's list that it knows. Tested on loopback: a new client against a server without the method, and the reverse, both chose `zlib@openssh.com`, and so did a new client against the Mac's OpenSSH. Both ends need patch 0022 (and so 0.6.5 or later) to use it. As with zlib, it starts only after authentication, so the decoder cannot be reached before login. It does not need zlib to build.
+- **Source.** The coder is copied from zstd 1.5.7 into `sphynx-ssh/huff0/` (about 8,000 lines, BSD or GPLv2, both licence files copied, a `README.md` listing the three small changes made so it builds on its own). `compress-huff0.c` is the wrapper, about 160 lines. The decoder checks each block's lengths against the packet size limit before it writes, and handles the one-byte run case itself, because zstd's decoder entry point leaves that to its caller. `tools/patches.sh check` now also counts files that are not committed yet, because new files are untracked until they are.
+- **Tests.** `tests/c/huff0_roundtrip.c` round-trips four kinds of data (zeros, text, skewed bytes and random) at sizes from 0 to 256 KiB, checks that text shrinks, zeros collapse and random data grows only by the 5-byte block header, refuses malformed streams (short headers, unknown types, zero and oversized lengths, a coded length not under the raw length, a stream longer than the output limit), and expands 4000 streams with flipped bytes without a crash. It was also run under AddressSanitizer and UBSan, clean. The test first failed on a run of one byte (the decoder case above), and its first two ASan runs found bugs in the test itself. The ssh handshake and data were checked by hand over loopback (`Compression yes` both ways, checksums of 30 MB of text and of random data matched, 64 percent and 100 percent sent). The Linux suite runs the C test and checks that `hpnssh -Q compression` lists the method; it has no daemon-based test of the method.
+
+Measured on the x86-64 server with the same links and data as the next table, HPN-SSH on both ends, `aes256-gcm`, 3 runs, MB/s of source data. "zlib" is `Compression yes` before the patch, "huff0" is `Compression yes` with it:
+
+| Link | Data | No compression | zlib | huff0 | Sent with huff0 | Client CPU-s/GB, zlib and huff0 |
+|---|---|---|---|---|---|---|
+| LAN | compressible | 580 | 59 | 253 | 65 % | 17.3 and 4.2 |
+| LAN | random | 625 | 68 | 417 | 100 % | 15.2 and 2.6 |
+| 1 Gbit/s, 50 ms | compressible | 93.9 | 51.4 | **130.7** | 64 % | 18.5 and 4.9 |
+| 1 Gbit/s, 50 ms | random | 93.9 | 58.5 | 93.9 | 100 % | 15.9 and 5.2 |
+| 100 Mbit/s, 50 ms | compressible | 11.3 | 17.0 | 17.0 | 65 % | 31.2 and 8.8 |
+| 100 Mbit/s, 50 ms | random | 11.3 | 11.3 | 11.3 | 100 % | 31.7 and 5.3 |
+| 10 Mbit/s, 50 ms | compressible | 1.2 | 1.8 | 1.8 | 66 % | 39.2 and 10.8 |
+| 10 Mbit/s, 50 ms | random | 1.2 | 1.2 | 1.2 | 100 % | 33.3 and 7.5 |
+
+- **At 1 Gbit/s over 50 ms it turns compression from a loss into a gain on compressible data:** 130.7 MB/s against 93.9 uncompressed (39 percent faster) and 51.4 with zlib (2.5 times). On incompressible data it costs nothing in speed there (93.9 against 93.9; zlib lost 38 percent).
+- **On slow links the speed is the same as zlib's**, because the link is the limit and both send 65 percent, but the client uses about a quarter of the CPU (8.8 against 31.2 seconds per GB at 100 Mbit/s).
+- **On a LAN it is still the wrong choice:** 253 MB/s against 580 uncompressed. It is 4.3 times faster than zlib (6.1 times on random data), not faster than sending the bytes.
+- **It is the same ratio as zlib's Huffman-only mode, no better.** The `zstd -3` pre-compression below still sends 25 percent and wins on slow links.
+- **Receiver cost was not measured separately.** The decoder was faster than the encoder in the in-memory benchmark, and each end only does one of the two for a one-way transfer.
+- The CPU figures count the client process and the `head` that feeds it, and are noisy at the slow links where it waits.
+
+The next table is for zlib (`Compression yes` before patch 0022, or against a peer without it). Throughput of one connection on the x86-64 server (network namespaces, `aes256-gcm`, 3 runs, MB/s of source data, 32 MiB buffers). The compressible data is log-like text that `gzip -6` shrinks 4.2 to 1; the other is random bytes.
+
+| Link | Data | OpenSSH off | OpenSSH on | HPN-SSH off | HPN-SSH on | Sent with it on | HPN-SSH client CPU-s/GB, off and on |
+|---|---|---|---|---|---|---|---|
+| LAN | compressible | 520 | 59 | 645 | 58 | 65 % | 1.70 and 17.6 |
+| LAN | random | 526 | 68 | 580 | 67 | 100 % | 1.93 and 15.3 |
+| 1 Gbit/s, 50 ms | compressible | 38.5 | 37.1 | 94.3 | 51.3 | 65 % | 3.65 and 18.5 |
+| 1 Gbit/s, 50 ms | random | 38.2 | 37.1 | 94.3 | 58.3 | 100 % | 3.60 and 16.0 |
+| 100 Mbit/s, 50 ms | compressible | 11.3 | 17.1 | 11.3 | 17.1 | 65 % | 3.33 and 31.2 |
+| 100 Mbit/s, 50 ms | random | 11.3 | 11.3 | 11.3 | 11.3 | 100 % | 3.33 and 31.3 |
+| 10 Mbit/s, 50 ms | compressible | 1.2 | 1.8 | 1.2 | 1.8 | 66 % | 5.83 and 40.0 |
+| 10 Mbit/s, 50 ms | random | 1.2 | 1.2 | 1.2 | 1.2 | 100 % | 5.00 and 33.3 |
+
+- **It only helps on a slow link with compressible data,** and then by about 1.5 times, which is the 65 percent it sends. At 100 and 10 Mbit/s the compressible data went 51 percent faster. Random data gained nothing at any speed and cost 4 to 9 times the CPU.
+- **On a fast link it hurts.** Compressing runs at only about 58 to 67 MB/s per connection (15 to 18 CPU-seconds per GB), so at 1 Gbit/s HPN-SSH fell 38 to 46 percent, and on the LAN every case was about 8 to 11 times slower. OpenSSH at 1 Gbit/s over 50 ms barely changed (38.5 to 37.1) because its 2 MiB window, not the compressor, was already the limit.
+- **Break-even on this data is about 300 Mbit/s** (estimated, not measured): above roughly 40 MB/s on the wire, the compressor is the limit rather than the link.
+- **Compress the data before it goes into SSH instead.** The same compressible data sent through `zstd -3` or `gzip -1` first (MB/s of source data, compression included, the receiver not decompressing):
+
+| Link | Plain | `Compression yes` | `zstd -3` | `gzip -1` | Sent with `zstd -3` |
+|---|---|---|---|---|---|
+| 1 Gbit/s, 50 ms, OpenSSH | 38.5 | 37.1 | 113.6 | 78.4 | 25 % |
+| 1 Gbit/s, 50 ms, HPN-SSH | 94.3 | 51.3 | 114.3 | 78.4 | 25 % |
+| 100 Mbit/s, 50 ms | 11.3 | 17.1 | 39.7 | 34.4 | 25 % |
+| 10 Mbit/s, 50 ms | 1.2 | 1.8 | 4.7 | 3.9 | 25 % |
+
+  `zstd -3` sent a quarter of the bytes, so the slow links went 3.5 to 4 times faster than plain, against 1.5 times for `Compression yes`. On the long 1 Gbit/s path it even took OpenSSH from 38.5 to 113.6 MB/s, presumably because OpenSSH's window then holds compressed bytes, and HPN-SSH from 94.3 to 114.3 (one `zstd` thread was then the limit). The cost is client CPU (about 10 to 21 CPU-seconds per GB against 3.3 to 5.8 for plain), and the numbers leave out decompressing at the far end, which a real transfer must do, for example `zstd -3 < file | hpnssh host 'zstd -d > file'`. `rsync -z` was not tried.
+- **Nothing here is specific to HPN-SSH:** OpenSSH and HPN-SSH compress identically. HPN-SSH is faster at 1 Gbit/s only because of its window.
+- **Limits.** One compressible data set (synthetic log text, 4.2 to 1) and one incompressible one, so another kind of data will differ. One connection, emulated links, one cipher. The comparison with `zstd` and `gzip` shows what the dictionary coder would have saved, which is the part the security fix gave up. The `huff0` figures are a standalone benchmark, not run inside SSH.
 
 ### Where the time goes
 
@@ -699,6 +779,22 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
 | 0020 | `cipher-ctr-mt-provider`: read the cipher state through the `EVP_CIPHER_CTX`, which fixes a crash with OpenSSL 4.1. | 0.5.3 | self-contained |
 | 0021 | `channels`: do not zero the 32 KiB extended data buffer on every pass of the event loop. 1 to 4 percent less server CPU. | 0.5.5 | self-contained |
+| 0022 | `compression`: add `huff0@hpnssh.org`, a dictionary-free method that sends the same bytes as zlib's Huffman-only mode at a quarter of the CPU. Copies zstd's `huff0` into `huff0/`. | 0.6.5 | HPN-SSH only (a new method name; both ends need it) |
+| 0023 | `clientloop`: check the server's metrics reply before reading it. Fixes reads past the packet buffer. | 0.6.6 | yes |
+| 0024 | `clientloop`: free the metrics objects and keep the session if a metrics file cannot be written. | 0.6.7 | yes |
+| 0025 | `sshconnect2`: keep the user's `KexAlgorithms` in the none switch rekey, and free the proposal. | 0.6.8 | yes |
+| 0026 | `ssh`: fall back to `FallbackPort` once, so a closed default port cannot loop. | 0.6.9 | yes |
+| 0027 | `clientloop`: give children started from the loop a clean signal mask. | 0.7.0 | yes |
+| 0028 | `serverloop`: log the throughput line once, and guard the rate against a zero duration. | 0.7.1 | yes |
+| 0029 | `kex`: refuse the none MAC unless the cipher is none and the session is authenticated. | 0.7.2 | yes |
+| 0030 | `packet`: decide whether the MAC is enabled per direction, from its name, and clear the none flags on each negotiation. | 0.7.3 | yes |
+| 0031 | `readconf`: `MetricsPath` turns metrics on only in an active block and only if `Metrics` is unset. | 0.7.4 | yes |
+| 0032 | `hpnsshd_config.5`: say that `DisableMTAES` covers only AES-CTR and how to keep the serial ChaCha. | 0.7.5 | yes |
+| 0033 | `readconf`, `packet`: range check `MetricsInterval` and `FallbackPort`, and return an error when the cipher is missing. | 0.7.6 | yes |
+| 0034 | `kex`, `cipher`, `chachapoly`: release the string and references that were taken on every key exchange or cipher start. | 0.7.7 | yes |
+| 0035 | `chachapoly-mt`: repair the keystream state in a forked child. | 0.7.8 | yes |
+| 0036 | `happyeyeballs`: read `fd_ai` only for its own sockets and keep `errno` on failure. | 0.7.9 | yes |
+| 0037 | `sshconnect`: name the port in the connect failure message. | 0.8.2 | yes |
 
 Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
 
@@ -731,7 +827,7 @@ Put the new commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, s
 
 ### Sending a patch upstream
 
-Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patches 0019 and 0021 are performance changes and patch 0020 is a bug fix, and all three stand on their own.
+Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patches 0019 and 0021 are performance changes and patch 0020 is a bug fix, and all three stand on their own. Patch 0022 adds a feature and files (it copies a part of zstd, with its licence files), and needs the peer to have it too; without it the connection falls back to zlib.
 
 ### How the series was made
 
@@ -765,7 +861,9 @@ tests/run-tests.sh
 SPHYNX_SKIP_BUILD=1 tests/run-tests.sh   # skip the end-to-end build
 ```
 
-The tests check that the version matches in `sphynx`, `README.md` and `CHANGELOG.md`, check the command line, run shellcheck, and build a package and inspect its metadata and contents. They also run the C tests in `tests/c/`, the `scp -Z` tests, a check of the performance analysis script, and the TCP tuning script's tests. The tuning script's tests that change settings need passwordless `sudo` and run only inside a throwaway network namespace; without `sudo` they are skipped.
+The tests check that the version matches in `sphynx`, `README.md` and `CHANGELOG.md`, check the command line, run shellcheck, and build a package and inspect its metadata and contents. They also run the C tests in `tests/c/`, the `scp -Z` tests, the checks in `tests/daemon-checks.sh` (below), a check of the performance analysis script, and the TCP tuning script's tests. The tuning script's tests that change settings need passwordless `sudo` and run only inside a throwaway network namespace; without `sudo` they are skipped.
+
+`tests/daemon-checks.sh <build-tree>` starts `hpnsshd` from a build tree as the current user on a free loopback port, with a throwaway key and configuration, and checks things that need a running server: a client can log in; a session survives an unwritable `MetricsPath`, and `Metrics yes` writes both files; the none switch rekey keeps the client's `KexAlgorithms`; the none MAC is refused with a real cipher and used with the none cipher after login; a command started from `~C` has no signals blocked (`tests/escape-sigmask.py`, on a pseudo terminal); the server logs the throughput line once for a session that was cut off; data sent over `aes256-ctr` arrives intact after the switch to the multithreaded cipher; `FallbackPort` at the default port gives up; and a control master built with AddressSanitizer survives a session that starts with `scp`. It installs nothing and writes only to a temporary directory. The suite runs it on Linux; some checks are skipped on other systems.
 
 `tests/package-lifecycle.sh` is not part of that suite. It installs, upgrades, removes, reinstalls and purges the built `.deb` on a machine, and checks the `hpnsshd` user, the host keys, the service and a login on port 2222. It changes the machine it runs on, so run it only in a throwaway VM or container that runs systemd. Its header has the commands for OrbStack.
 
@@ -775,6 +873,7 @@ The tests check that the version matches in `sphynx`, `README.md` and `CHANGELOG
 sphynx                      wrapper script
 packaging/ubuntu/           control template, maintainer scripts, systemd unit, PAM file, conffiles
 tests/run-tests.sh          test suite, with its C tests in tests/c/ and the scp -Z tests in tests/scp-resume.sh
+tests/daemon-checks.sh      checks against an hpnsshd started from a build tree
 tests/package-lifecycle.sh  install, upgrade, remove and purge of the .deb, for a throwaway systemd machine
 tools/perf/                 performance comparison of OpenSSH and HPN-SSH (see tools/perf/README.md)
 tools/tune-tcp.sh           applies the TCP buffer tuning described in this file

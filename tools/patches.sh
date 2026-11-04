@@ -36,7 +36,8 @@ cmd_check() {
     am "$tmp/t" || die "the series does not apply to $BASE"
 
     # the result must be the same files as sphynx-ssh's working tree
-    want="$(git -C "$src" diff --name-only "$BASE" | sort)"
+    # files not committed yet count too, since a new file is untracked until it is
+    want="$({ git -C "$src" diff --name-only "$BASE"; git -C "$src" ls-files --others --exclude-standard; } | sort -u)"
     got="$(git -C "$tmp/t" diff --name-only "$BASE" HEAD | sort)"
     [ "$want" = "$got" ] || die "the series and $src change different files:
 $(diff <(echo "$want") <(echo "$got") || true)"

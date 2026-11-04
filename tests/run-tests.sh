@@ -56,7 +56,7 @@ pass "--jobs must be positive"
 # --- lint -----------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tests/package-lifecycle.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/suggest-cipher.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
+    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/daemon-checks.sh tests/build-c-test.sh tests/package-lifecycle.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/suggest-cipher.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
     pass "shellcheck is clean"
 else
     echo "skip - shellcheck not installed"
@@ -304,7 +304,7 @@ pass "config files are marked as conffiles"
 
 tree="$TEST_DIR/build/ubuntu/src"
 
-for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt aes_ctr_mt_init; do
+for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt aes_ctr_mt_init huff0_roundtrip metrics_blob cipher_leaks chachapoly_mt_fork happyeyeballs_gap; do
     tests/build-c-test.sh "$tree" "tests/c/$t.c" "$TEST_DIR/$t" >"$TEST_DIR/$t.build" 2>&1 \
         || { tail -n 20 "$TEST_DIR/$t.build" >&2; fail "could not build tests/c/$t.c"; }
     "$TEST_DIR/$t" >"$TEST_DIR/$t.out" 2>&1 \
@@ -316,6 +316,48 @@ if [ "$("$tree/hpnssh" -G -T -oNoneSwitch=yes -oNoneEnabled=yes localhost | grep
     fail "ssh -T must not turn off NoneSwitch"
 fi
 pass "ssh -T leaves NoneSwitch alone"
+
+# MetricsPath turns metrics on, but not from a Host block that does not match, and not over Metrics no (0.7.4)
+printf 'Host elsewhere\n  MetricsPath /tmp/x\n' >"$TEST_DIR/metrics-host.conf"
+printf 'Metrics no\nMetricsPath /tmp/x\n' >"$TEST_DIR/metrics-no.conf"
+printf 'MetricsPath /tmp/x\n' >"$TEST_DIR/metrics-path.conf"
+[ "$("$tree/hpnssh" -F "$TEST_DIR/metrics-host.conf" -G localhost 2>/dev/null | grep -c '^metrics no$')" = 1 ] \
+    || fail "a MetricsPath in a Host block that does not match turned metrics on"
+[ "$("$tree/hpnssh" -F "$TEST_DIR/metrics-no.conf" -G localhost 2>/dev/null | grep -c '^metrics no$')" = 1 ] \
+    || fail "MetricsPath turned metrics on after Metrics no"
+[ "$("$tree/hpnssh" -F "$TEST_DIR/metrics-path.conf" -G localhost 2>/dev/null | grep -c '^metrics yes$')" = 1 ] \
+    || fail "MetricsPath no longer turns metrics on"
+pass "MetricsPath obeys Host blocks and Metrics no"
+
+# MetricsInterval and FallbackPort have limits (0.7.6)
+for bad in "MetricsInterval 0" "MetricsInterval 86401" "FallbackPort 0" "FallbackPort 65536"; do
+    echo "$bad" >"$TEST_DIR/bounds.conf"
+    if "$tree/hpnssh" -F "$TEST_DIR/bounds.conf" -G localhost >/dev/null 2>&1; then
+        fail "hpnssh accepted $bad"
+    fi
+done
+for good in "MetricsInterval 1" "MetricsInterval 86400" "FallbackPort 1" "FallbackPort 65535"; do
+    echo "$good" >"$TEST_DIR/bounds.conf"
+    "$tree/hpnssh" -F "$TEST_DIR/bounds.conf" -G localhost >/dev/null 2>&1 || fail "hpnssh rejected $good"
+done
+pass "MetricsInterval and FallbackPort are range checked"
+
+# With HappyEyes a connect that failed at once was reported as "failure": errno had been cleared (0.7.9)
+for h in fe80::1 255.255.255.255; do
+    msg="$("$tree/hpnssh" -o HappyEyes=yes -o ConnectTimeout=3 -o BatchMode=yes -p 22 "$h" true 2>&1 | tail -n 1 || true)"
+    case "$msg" in
+        *": failure"|*": Success") fail "HappyEyes reported no reason for a failed connect to $h: $msg" ;;
+        *" port 22: "*) ;;
+        *) fail "the failed connect to $h did not name the port: $msg" ;;
+    esac
+done
+pass "a failed HappyEyes connect says why, and names the port"
+
+[ "$("$tree/hpnssh" -Q compression | grep -cx 'huff0@hpnssh.org')" = 1 ] \
+    || fail "hpnssh -Q compression does not list huff0@hpnssh.org"
+[ "$("$tree/hpnssh" -G -oCompression=yes localhost | grep -c '^compression yes$')" = 1 ] \
+    || fail "hpnssh does not accept Compression=yes"
+pass "hpnssh lists the huff0@hpnssh.org compression method"
 
 sc_line="$(tools/suggest-cipher.sh --no-measure --config)"
 for opt in Ciphers MACs; do
@@ -334,5 +376,9 @@ pass "hpnssh accepts every name in the Ciphers and MACs lines from tools/suggest
 tests/scp-resume.sh "$tree/hpnscp" "$TEST_DIR/scp-resume" >"$TEST_DIR/scp-resume.out" 2>&1 \
     || { cat "$TEST_DIR/scp-resume.out" >&2; fail "scp -Z resume tests"; }
 pass "scp -Z resume tests pass ($(grep -c '^ok' "$TEST_DIR/scp-resume.out") checks)"
+
+tests/daemon-checks.sh "$tree" >"$TEST_DIR/daemon-checks.out" 2>&1 \
+    || { cat "$TEST_DIR/daemon-checks.out" >&2; fail "checks against a running hpnsshd"; }
+pass "checks against a running hpnsshd pass ($(grep -c '^ok' "$TEST_DIR/daemon-checks.out") checks)"
 
 echo "$PASSED checks passed"

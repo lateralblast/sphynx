@@ -4,6 +4,138 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `sshconnect.c`: with `HappyEyes yes` a failed connection was reported as `ssh: connect to host H port : reason`, with no port, because the message used a string that only the address loop fills in. It now prints the port that was asked for. Patch 0037; `tests/run-tests.sh` checks the message names the port.
+
+## [0.8.1] - 2026-11-05
+
+### Added
+
+- `tests/daemon-checks.sh` automates the check of the `scp` to `hpnscp` rewrite (0.2.2): it builds `clientloop.c` with AddressSanitizer into a copy of the tree, starts a control master against the test daemon, runs a session whose command starts with `scp`, and requires the master to still be running. With the old `clientloop.c` the master dies on the heap use after free. The suite runs it on Linux, and it skips itself if the sanitizer build fails.
+
+## [0.8.0] - 2026-11-05
+
+### Added
+
+- `tests/scp-resume.sh` tests the error paths of the `scp -Z` resume: a sink whose file size limit is lower than the file it is resuming (`ulimit -f` with `SIGXFSZ` ignored) must fail, put the existing file back to its length and leave no temporary file, both when the appended tail does not fit and when the tail cannot be written at all; a control with a higher limit succeeds. They run in the Linux suite, with no code change.
+
+## [0.7.9] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `happyeyeballs.c`: with `HappyEyes yes`, another open descriptor between two of its sockets made it read an `fd_ai` entry that was never set (a null pointer dereference with this build's zeroed locals), and a connect that failed at once was reported as `failure` because `errno` had been cleared. It now reads the entry only for its own sockets, clears the array and keeps the error. Patch 0036; `tests/c/happyeyeballs_gap.c` crashed the old code with signal 11 and passes, and `tests/run-tests.sh` checks the message.
+
+## [0.7.8] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `cipher-chachapoly-libcrypto-mt.c`: after a `fork()` in the middle of a session (`~&`, or `ControlPersist` on a control master) the multithreaded ChaCha child tried to join manager threads that only the parent had, and never had the keystream they were making; the guard for it was under `#ifdef SAFETY`, which nothing defines. A `pthread_atfork()` handler now counts forks, and a context copied by a fork regenerates its keystream before it is used. The unit test killed the old child (a crash) and passes now. Patch 0035; `tests/c/chachapoly_mt_fork.c`. Not changed: a `pthread_create` failure in the crypt path still leaves the sequence number advanced, which ends the connection and is benign on glibc.
+
+## [0.7.7] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `kex.c`, `cipher.c` and `cipher-chachapoly-libcrypto.c`: the key exchange threw away a string from `match_list()` each time (a small real leak), `cipher_init()` loaded the provider and fetched the multithreaded AES-CTR cipher on every start and never released them, and `chachapoly_new()` kept the reference to the POLY1305 MAC. The provider and cipher are now loaded and fetched once, and the MAC reference is released. The OpenSSL objects are cached, so those references were counters and not growing memory, and no test can see them; `tests/c/cipher_leaks.c` counts OpenSSL's allocations over repeated starts and checks the multithreaded AES-CTR bytes, and `tests/daemon-checks.sh` sends data over `aes256-ctr` through the switch. Patch 0034. Also fixes a `const` warning in patch 0029's `kex.c` change.
+
+## [0.7.6] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `readconf.c` and `packet.c`: `MetricsInterval` and `FallbackPort` accepted any value that parsed, so `MetricsInterval 0` polled on every pass of the client loop and a port above 65535 reached the resolver. They now accept 1 to 86400 and 1 to 65535. `ssh_set_newkeys()` returned a stale 0 when it could not find the multithreaded ChaCha cipher, and now returns an error; that path cannot be reached today. Patch 0033; `tests/run-tests.sh` checks the limits.
+
+## [0.7.5] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `hpnsshd_config.5`: `DisableMTAES` is documented as covering only the multithreaded AES-CTR cipher, and it does. The review report that it should also stop the server promoting to multithreaded ChaCha is not a bug in the code; the page now says that `DisableMTAES` leaves ChaCha alone and that leaving `chacha20-poly1305-mt@hpnssh.org` out of `Ciphers` keeps the serial ChaCha. Patch 0032.
+
+## [0.7.4] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `readconf.c`: a `MetricsPath` in a `Host` block that did not match turned metrics on for every connection, and a `MetricsPath` after `Metrics no` overrode it. `MetricsPath` now turns metrics on only in a block that applies and only when `Metrics` is not set. Patch 0031; `tests/run-tests.sh` checks the three cases with `hpnssh -G`.
+
+## [0.7.3] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `kex.c` and `packet.c`: the flag that turns the MAC off for the none MAC was connection-wide and never cleared, so a none/none result in one direction switched the MAC off in the other, and it stayed off after a rekey back to a real cipher. Each direction now decides from its own MAC name, and the flags are cleared at the start of each negotiation. Patch 0030. The existing none switch checks in `tests/daemon-checks.sh` still pass; the asymmetric case cannot be set up from the client options, so it has no test of its own.
+
+## [0.7.2] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `kex.c`: with `NoneMacEnabled`, a client that listed `none` in `MACs` negotiated a real cipher such as `aes256-ctr` with the MAC `none` in the first key exchange, so the stream had no integrity check before login. The none MAC is now dropped from the lists unless the cipher is `none` and the connection is authenticated, and the next MAC in the list is used. Patch 0029; `tests/daemon-checks.sh` checks that it is refused with a real cipher and still used after the none switch.
+
+## [0.7.1] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `serverloop.c` and `packet.c`: the server wrote its `LType: Throughput` log line twice for a session that ended in the server loop (a client that dropped the connection without a disconnect message), and printed `inf` or `nan` rates for a session of zero length. It now writes the line once, after the channels close, and reports a rate of 0 for a zero-length session. Patch 0028; `tests/daemon-checks.sh` kills a client and counts the lines.
+
+## [0.7.0] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `clientloop.c`: the client loop keeps HUP, INT, QUIT and TERM blocked and unblocks them only inside `ppoll()`, so a command started from `~C` then `!cmd`, and the `xauth` command run for a session opened through a control master, inherited a mask that ignored those signals (`SigBlk: 0000000000004007`). They now start with the loop's original mask. Patch 0027; `tests/escape-sigmask.py` and `tests/daemon-checks.sh` check it on a pseudo terminal.
+
+## [0.6.9] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `ssh.c`: `hpnssh` with `FallbackPort` set to the default port (2222) retried a failed connection for ever, leaking the resolved addresses on every pass. It now falls back once and exits with status 255. Patch 0026; `tests/daemon-checks.sh` checks it.
+
+## [0.6.8] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `sshconnect2.c`: the rekey that switches to the none cipher after login (`NoneSwitch yes`) dropped the client's `KexAlgorithms` and used the built-in list, so a client set to `curve25519-sha256` rekeyed with `mlkem768x25519-sha256`. With `NoneMacEnabled` it also leaked the first proposal. It now keeps the setting and builds and frees the proposal once. Patch 0025; `tests/daemon-checks.sh` checks the rekey's algorithm.
+
+## [0.6.7] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `clientloop.c` and `metrics.c`: `Metrics yes` leaked a buffer on every poll (every 5 s by default) because the local metrics object was never freed, leaked the local file on one error path, and ended the whole session with `fatal()` when `MetricsPath` could not be written. It now frees the object and closes the file on every path, reports a file it cannot open once, and carries on. The output string is zeroed, so a bad object no longer prints garbage. Patch 0024; `tests/daemon-checks.sh` (new, starts a daemon from the build tree) checks that a session survives an unwritable `MetricsPath` and that the metrics files are written.
+
+## [0.6.6] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `clientloop.c` and `metrics.c`: the HPN-SSH client no longer reads past the packet when the server's metrics reply (`Metrics yes`) is short or malformed. The reply was passed to the binn parser with no size, the result of reading it from the packet was ignored, and an empty reply was parsed anyway. `metrics_blob_valid()` now checks it is one whole binn object of the length received, and a bad reply is reported and skipped. Patch 0023, with `tests/c/metrics_blob.c`, which feeds it truncated and corrupted objects under AddressSanitizer.
+
+## [0.6.5] - 2026-11-05
+
+### Added
+
+- Patch 0022 adds a compression method, `huff0@hpnssh.org`. `Compression yes` (`hpnssh -C`) uses it when both ends have it, and falls back to `zlib@openssh.com` when the other end is an older HPN-SSH or OpenSSH, so nothing changes against them. It codes each packet on its own with the Huffman coder from zstd and keeps no state between packets, so it has no shared dictionary, and it sends the same 65 percent of log text as zlib's Huffman-only mode at about a quarter of the client CPU. On the x86-64 server at 1 Gbit/s over 50 ms it gave 130.7 MB/s on compressible data, against 93.9 with no compression and 51.4 with zlib; on a LAN it is 4.3 times faster than zlib but still slower than no compression, and on 100 and 10 Mbit/s links it matches zlib's speed. `hpnssh -Q compression` lists it. The coder is copied from zstd 1.5.7 into `sphynx-ssh/huff0/` with its licence files. The README "Compression" section has the method, its results and its limits.
+- `tests/c/huff0_roundtrip.c` tests the method: round trips from 0 to 256 KiB on four kinds of data, malformed and corrupted streams, clean under AddressSanitizer. The suite runs it and checks that `hpnssh -Q compression` lists the method.
+
+### Changed
+
+- `tools/patches.sh check` counts files that are not committed yet, so a patch that adds files can be checked before the commit.
+- The TODO item on better SSH compression is closed. New items cover measuring downloads and the receiver's CPU, shipping the licences in the `.deb`, a daemon-based compression test and an opt-in dictionary mode.
+
+## [0.6.4] - 2026-11-05
+
+### Added
+
+- `tools/perf/huff0-bench.c` times zlib's Huffman-only mode, zlib level 6 and `huff0` (zstd's Huffman coder, which has no dictionary) on 32 KiB packets, and the README "Compression" section reports it: `huff0` sends the same 64 percent of log text as the Huffman-only mode `Compression yes` uses, and compresses 8 to 10 times faster (615 against 78 MB/s on the x86-64 server, 1407 against 148 on an M1 Max). It is a standalone benchmark and is not built into `hpnssh`.
+
+## [0.6.3] - 2026-11-05
+
+### Changed
+
+- The README "Compression" section now says why the compressor is Huffman-only: OpenSSH commit `1d5340fce` (2026-09-22) did it on purpose to stop a plaintext-recovery attack through the dictionary shared by all channels of a session, at the cost of compression ratio. The earlier text that called the reason unknown, and that said compression "never helped much", is corrected. The open TODO item is rewritten around whether to offer a dictionary or zstd mode as an opt-in.
+
+## [0.6.2] - 2026-11-04
+
+### Added
+
+- The README has a "Compression" section, the first measurement of `Compression yes`. The compressor is zlib at its fastest level with the Huffman-only strategy (`packet.c`), so it cannot beat 8 to 1 and sent 65 percent of log text that `gzip -6` shrinks to 24 percent. It helps only on slow links with compressible data, by about 1.5 times (100 and 10 Mbit/s), does nothing for random data while using 4 to 9 times the CPU, and slows a connection on a fast link (HPN-SSH down 38 to 46 percent at 1 Gbit/s, about 8 to 11 times slower on a LAN). Compressing with `zstd -3` before sending was 3.5 to 4 times faster than plain on slow links. The TODO item on compression is closed.
+
 ## [0.6.1] - 2026-11-04
 
 ### Added

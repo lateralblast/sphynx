@@ -25,7 +25,7 @@ pair() {
     while [ "$1" != "--" ]; do snd+=("$1"); shift; done
     shift
     snk=("$@")
-    coproc SINK { timeout 30 "$SCP" -t "${snk[@]}" 2>"$W/sink.err"; }
+    coproc SINK { eval "${SINK_PRE:-:}"; timeout 30 "$SCP" -t "${snk[@]}" 2>"$W/sink.err"; }
     # shellcheck disable=SC2153 # SINK_PID is set by coproc
     local sink_pid=$SINK_PID sink_in=${SINK[1]} sink_out=${SINK[0]}
     # bash does not pass the coprocess descriptors on to background jobs, so
@@ -83,6 +83,29 @@ hash0=$(printf '%0128d' 0)
 { printf '\000'; printf '%-191s' "R0644 99999999 $hash0"; printf '\000'; } | timeout 20 "$SCP" -f -Z "$W/t7" >"$W/out7" 2>"$W/err7"; rc=$?
 sz=$(stat -c %s "$W/out7")
 if [ "$sz" -ge 200000 ]; then pass "an impossible remote size sends the whole file again"; else fail "impossible remote size: sender wrote only $sz bytes (rc $rc)"; fi
+
+# 8: the tail arrives but appending it to the existing file fails (the file would grow past the size limit).
+# The sink must fail and put the existing file back as it was, not leave the part of the tail that fitted.
+# SINK_PRE limits the sink's file size, and ignores SIGXFSZ so that the write fails with an error and does not
+# end the process. The same limit raised is a control: it must succeed, so the limit is what causes the failure.
+head -c 1200000 "$W/big" > "$W/d/part8c"
+SINK_PRE='ulimit -f 4000; trap "" XFSZ' pair -Z "$W/big" -- -Z "$W/d/part8c"
+unset SINK_PRE
+if [ $PAIR_RC -eq 0 ] && same "$W/big" "$W/d/part8c"; then pass "the append works when the size limit is high enough"; else fail "control for the size limit failed (rc $PAIR_RC)"; fi
+head -c 1200000 "$W/big" > "$W/d/part8"
+SINK_PRE='ulimit -f 1953; trap "" XFSZ' pair -Z "$W/big" -- -Z "$W/d/part8"
+unset SINK_PRE
+if [ $PAIR_RC -ne 0 ]; then pass "a failed append of the resumed tail is reported"; else fail "failed append was not reported"; fi
+if [ "$(stat -c %s "$W/d/part8")" = 1200000 ] && cmp -s "$W/d/part8" <(head -c 1200000 "$W/big"); then pass "a failed append leaves the existing file as it was"; else fail "existing file changed by a failed append: $(stat -c %s "$W/d/part8") bytes"; fi
+left=$(find "$W/d" -name 'part8' -o -name '.*part8*' -o -name '*part8.*' | wc -l)
+if [ "$left" = 1 ]; then pass "a failed append leaves no temporary file"; else fail "temporary file left after a failed append ($left names)"; fi
+
+# 9: the tail itself cannot be written (it is bigger than the size limit), so nothing may be appended
+head -c 1200000 "$W/big" > "$W/d/part9"
+SINK_PRE='ulimit -f 976; trap "" XFSZ' pair -Z "$W/big" -- -Z "$W/d/part9"
+unset SINK_PRE
+if [ $PAIR_RC -ne 0 ]; then pass "a tail that cannot be written is reported"; else fail "unwritable tail was not reported"; fi
+if [ "$(stat -c %s "$W/d/part9")" = 1200000 ] && cmp -s "$W/d/part9" <(head -c 1200000 "$W/big"); then pass "an unwritable tail leaves the existing file as it was"; else fail "existing file changed: $(stat -c %s "$W/d/part9") bytes"; fi
 
 echo "$failures failure(s)"
 [ $failures -eq 0 ]
