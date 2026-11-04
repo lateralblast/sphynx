@@ -1,3 +1,5 @@
+<img src="sphynx.jpg" alt="sphynx" width="110" align="right">
+
 # sphynx
 
 Version: 0.4.7
