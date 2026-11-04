@@ -4,6 +4,50 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-04
+
+### Fixed
+
+- HPN-SSH built against OpenSSL 4.1 no longer crashes on `aes128-ctr`, `aes192-ctr` and `aes256-ctr`. `aes_mt_get_ctx_params` and `aes_mt_set_ctx_params` in `sphynx-ssh/cipher-ctr-mt-provider.c` used the `EVP_CIPHER_CTX` libcrypto gave them as the cipher state itself, instead of fetching the state from its app data as the rest of the provider does, so they read 17 MB past the end of a small allocation and wrote the key length into the wrong structure. With OpenSSL 3.5 this went unnoticed. This is patch 0020. The Ubuntu package, built with OpenSSL 3.5, was not affected.
+
+### Added
+
+- `tests/c/aes_ctr_mt_init.c` starts every AES-CTR key size through `cipher_init()` with threads, for both directions, and checks that the output matches the unthreaded cipher. It crashes without patch 0020 on OpenSSL 4.1 and passes on 3.5 and 4.1 with it.
+
+## [0.5.2] - 2026-11-04
+
+### Fixed
+
+- The README and `tools/suggest-cipher.sh` overstated AES-GCM's lead over HPN-SSH's default cipher. The raw `openssl speed` ratio (1.7 to 3.7 times per core) is against single-threaded ChaCha, and end to end AES-GCM led the default multithreaded ChaCha by only 5 to 6 percent. The text now says so, and `aes256-ctr` is no longer described as slower than AES-GCM on every machine: with the faster XOR loop it was ahead on the Mac and behind on x86-64.
+
+### Added
+
+- The README has a "Cipher choice end to end" table of all five ciphers on macOS arm64 and Linux x86-64.
+
+## [0.5.1] - 2026-11-04
+
+### Added
+
+- The README has an "Other TCP settings" section: `tcp_notsent_lowat`, a larger initial congestion window and an `fq` qdisc did not fix `cubic`'s stalls at 0.1 % loss (one run in four went over 80 seconds with each), and `fq` did not help `bbr`. The TODO item on cheap TCP settings is closed.
+
+## [0.5.0] - 2026-11-04
+
+### Added
+
+- The README has a "Packet loss and congestion control" section. On an emulated 50 ms, 1 Gbit/s path `bbr` held about 68 MB/s from 0.02 % to 0.2 % loss per direction, while the default `cubic` fell to 58 MB/s at 0.05 %, was erratic from 0.1 % and did not finish at 0.5 %. HPN-SSH kept 53 MB/s at 0.5 % against OpenSSH's 24 MB/s with `bbr`. It is a sender-side kernel setting, not an HPN-SSH option. The packet loss part of the TODO item on loss, jitter and congestion control is closed.
+
+## [0.4.9] - 2026-11-04
+
+### Added
+
+- The README has an "OpenSSL version" section comparing HPN-SSH built against OpenSSL 3.5.9 and 4.1.0: the same speed for ChaCha and AES-GCM. It also records that a build against OpenSSL 4.1 crashes on `aes256-ctr`, which is now in `TODO.md`. The TODO item to investigate the OpenSSL 3 provider path is closed.
+
+## [0.4.8] - 2026-11-04
+
+### Added
+
+- The README has a "Rekeying" section: 8 GB transfers with the default `RekeyLimit`, `1G` and `256M` show no stall at a rekey for `aes256-ctr`, ChaCha or AES-GCM, so there is no reason to raise `RekeyLimit` for throughput. The TODO item to investigate rekeying is closed.
+
 ## [0.4.7] - 2026-11-04
 
 ### Changed

@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 0.4.7
+Version: 0.5.3
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -184,6 +184,96 @@ Run the server inside `srv` (`sudo ip netns exec srv /path/to/sshd ...`) and tim
 - More threads do not help. Throughput is flat from 1 to 4 threads on Linux and falls a little on the Mac, so the default of 1 is the right setting at these speeds. The cipher is not what limits a single connection at about 1 GB/s.
 - Loopback only, with the client and server on the same CPUs. A real 10 Gbit/s link or a long path has not been tried, so this does not rule out a gain there.
 - The two AES-CTR implementations cap the setting differently (4 threads in `cipher-ctr-mt.c`, 32 in `cipher-ctr-mt-functions.c`, which is the one the OpenSSL 3 build uses). Values above the cap are lowered to it.
+
+### Rekeying
+
+A long connection renegotiates its keys every `RekeyLimit` bytes. HPN-SSH's AES-CTR cipher throws away its pre-generated keystream and restarts its threads at each rekey, so I looked for a stall. HPN-SSH to HPN-SSH over loopback on the x86-64 server, 8 GB sent per run, throughput recorded every 0.25 seconds, medians of the per-bin rates:
+
+| Cipher | Default rekey (none in 8 GB) | `RekeyLimit 1G` | `RekeyLimit 256M` |
+|---|---|---|---|
+| `aes256-ctr` | 587 MB/s | 642 MB/s | 625 MB/s |
+| `chacha20-poly1305-mt@hpnssh.org` | 667 MB/s | 682 MB/s | 667 MB/s |
+| `aes256-gcm@openssh.com` | 709 MB/s | 677 MB/s | 667 MB/s |
+
+- Rekeying costs nothing you can see. No 0.25 second bin fell below 60 percent of the median in any of the nine runs, and the slowest bin was at most about 22 percent below it. The runs with no rekeying have dips of 11 to 17 percent too, so those dips are not from rekeying. A `-v` client confirmed the rekeys happen: 33 rekey-related debug lines in 2 GB at `256M`, none at the default.
+- The differences between columns are the run-to-run spread, not an effect of rekeying (the 8 GB runs went one after another, and the machine's speed drifts by about 10 percent).
+- A stall shorter than 0.25 seconds would not show, but it would also show up as a lower average, and the averages are the same.
+- You do not need to raise `RekeyLimit` to protect throughput.
+
+### OpenSSL version
+
+The Ubuntu package is built against OpenSSL 3.5. HPN-SSH goes through OpenSSL's provider interface for every packet, so I built the same source (0.5.3) against OpenSSL 3.5.9 and 4.1.0 on a 10-core Mac and compared them over loopback (median of 5 runs of 1024 MB, arm64).
+
+| Cipher | OpenSSL 3.5.9 | OpenSSL 4.1.0 |
+|---|---|---|
+| `chacha20-poly1305-mt@hpnssh.org` | 860 MB/s | 846 MB/s |
+| `aes256-ctr` | 967 MB/s | 951 MB/s |
+| `aes256-gcm@openssh.com` | 895 MB/s | 938 MB/s |
+
+- The two versions are the same speed (the spread between runs is 5 to 10 percent), so the provider interface is not a cost worth chasing.
+- **Before 0.5.3, HPN-SSH built against OpenSSL 4.1 crashed on every `aes-ctr` connection.** The AES-CTR provider hands OpenSSL an `EVP_CIPHER_CTX` and keeps its real state as that context's app data, but its two parameter functions (`aes_mt_get_ctx_params`, `aes_mt_set_ctx_params`) used the pointer they were given as the state itself. They read a field 17 MB past the end of a small allocation, and wrote the key length over a field of the `EVP_CIPHER_CTX`. With OpenSSL 3.5 a connection did not fault; with 4.1 it died with a bus error, at an address exactly `offsetof(ongoing)` past the context pointer. Patch 0020 fixes it, and `tests/c/aes_ctr_mt_init.c` crashes without it. The Ubuntu package was not affected, but a build against OpenSSL 4, such as Homebrew's current `openssl`, was. The same code is in upstream HPN-SSH.
+
+### Packet loss and congestion control
+
+Every long-path result above is on a clean link. Real paths lose packets, and then the kernel's congestion control algorithm matters as much as the buffer size. This compares Linux's default, `cubic`, with `bbr`, both with the buffers raised to 32 MiB, on an emulated 50 ms, 1 Gbit/s path (two network namespaces on the x86-64 server with `tc netem`, Linux 7.0). Loss is applied in each direction, so a round trip sees about twice the figure. HPN-SSH, `aes256-gcm`, 192 MB per run, 3 runs (MB/s). The data goes from client to server, so the setting that matters is the sender's. `t/o` is a run that took over 100 seconds, under 2 MB/s.
+
+| Loss per direction | `cubic`, median (runs) | `bbr`, median (runs) |
+|---|---|---|
+| 0.02 % | 66.9 (66.9, 63.8, 68.2) | 68.7 (67.5, 68.8, 68.7) |
+| 0.05 % | 58.6 (58.6, 58.3, 60.5) | 68.6 (68.6, 68.7, 68.2) |
+| 0.1 % | 38.0 (t/o, 62.9, 38.0) | 67.8 (68.1, 67.4, 67.8) |
+| 0.2 % | 52.2 (56.7, 52.2, 29.5) | 67.7 (67.0, 67.8, 67.7) |
+
+An earlier, smaller run (128 MB, 2 runs, runs over 150 seconds counted as `t/o`) compared both programs:
+
+| Loss per direction | Congestion control | OpenSSH 10.2 (Ubuntu) | HPN-SSH |
+|---|---|---|---|
+| 0 | `cubic` | 28.9 MB/s | 56.7 MB/s |
+| 0 | `bbr` | 29.4 MB/s | 57.3 MB/s |
+| 0.1 % | `cubic` | 19.4 MB/s (runs 28.7 and 19.4) | 1.5 MB/s (runs 52.6 and 1.5) |
+| 0.1 % | `bbr` | 26.2 MB/s | 55.3 MB/s |
+| 0.5 % | `cubic` | t/o (runs 1.1 and t/o) | t/o |
+| 0.5 % | `bbr` | 23.9 MB/s | 52.9 MB/s |
+
+- **`bbr` held the clean-link speed at every loss rate tried, up to 0.5 % per direction.** `cubic` was 15 percent behind at 0.05 %, became erratic from 0.1 % (some runs stalled for over a minute), and at 0.5 % did not finish in 150 seconds for either program.
+- **Both programs are limited by `cubic` the same way, but HPN-SSH starts from much higher.** With `bbr` at 0.5 % HPN-SSH kept 53 MB/s against OpenSSH's 24 MB/s.
+- **`bbr` is a setting on the sending host, not an HPN-SSH option.** For an upload it is the client's kernel, for a download the server's. On Linux: `sudo modprobe tcp_bbr`, then `sudo sysctl -w net.ipv4.tcp_congestion_control=bbr`. `tools/tune-tcp.sh` does not set it. It is listed in `TODO.md`.
+- **Limits.** This is an emulated link on one machine, with 192 MB transfers and 3 runs, so the `cubic` figures are rough (it fails in a different way from run to run, which is the finding). It was not tried on a real lossy path, with jitter, with several flows sharing a link (where `bbr` can take more than its share from `cubic` flows), or with reordering. Test it on your own path before changing a shared server.
+
+### Other TCP settings
+
+Does anything cheaper than a new congestion control fix the `cubic` stalls? Same emulated path as above, with 0.1 % loss per direction, HPN-SSH, 192 MB, 4 runs, `t/o` a run over 80 seconds (MB/s). The median of a set containing a `t/o` is the lower of its two middle values.
+
+| Setting on the sender | Median (runs) |
+|---|---|
+| `cubic` (the baseline) | 51.7 (t/o, 61.6, 67.4, 51.7) |
+| `cubic` and `net.ipv4.tcp_notsent_lowat=1048576` | 65.5 (t/o, 67.1, 65.5, 68.0) |
+| `cubic` and an initial congestion window of 100 (`ip route ... initcwnd 100`) | 65.3 (t/o, 70.5, 70.7, 65.3) |
+| `cubic` and an `fq` qdisc | t/o (t/o, t/o, 3.8, t/o) |
+| `bbr` | 68.3 (68.3, 68.7, 68.7, 68.1) |
+| `bbr` and an `fq` qdisc | 64.8 (64.0, 64.8, 64.9, 64.9) |
+
+- **None of them fixes `cubic`.** Every `cubic` variant had one run in four go over 80 seconds, and the differences between their medians are the spread of four runs, not an effect. Only `bbr` removed the stalls.
+- **`fq` does not help `bbr`** here (64.8 against 68.3), because the kernel already paces `bbr`. With `cubic`, `fq` at its default settings collapsed the transfer. I did not look into why: its default per-flow limit of 100 packets is the likely cause with a 32 MiB window, and a larger `flow_limit` was not tried.
+- **Not measured:** `tcp_slow_start_after_idle` (it only matters when a connection goes idle), `tcp_mtu_probing` (it needs a path that drops large packets), and on macOS `net.inet.tcp.delayed_ack`, because macOS has no way to emulate delay on loopback.
+- `tools/tune-tcp.sh` does not set any of these, and I do not see a reason to add them.
+
+### Cipher choice end to end
+
+HPN-SSH to HPN-SSH over loopback, 0.4.7, all five ciphers, median of 5 runs (MB/s). The multithreaded ChaCha is HPN-SSH's default, and the serial one is what an OpenSSH peer would use.
+
+| Cipher | macOS arm64, 10 cores (1024 MB) | Linux x86-64, 20 cores (2048 MB) |
+|---|---|---|
+| `aes128-gcm@openssh.com` | 985 | 600 |
+| `aes256-gcm@openssh.com` | 942 | 594 |
+| `aes256-ctr` (with `umac-64-etm`) | 973 | 542 |
+| `chacha20-poly1305-mt@hpnssh.org` (default) | 892 | 568 |
+| `chacha20-poly1305@openssh.com` (serial) | 639 | 458 |
+
+- The top four are within about 10 percent of each other on both machines. AES-GCM leads the default multithreaded ChaCha by 5 to 6 percent (942 against 892 on the Mac, 594 against 568 on the x86-64 server). The serial ChaCha is far behind (about 30 percent), which is why multithreading it matters.
+- `aes256-ctr` is ahead of AES-256-GCM on the Mac and behind it on x86-64. It includes the faster XOR loop from 0.4.5. Which is best changes with the machine, so do not read a lead of a few percent as a rule.
+- One machine of each kind, loopback only, so the client and server share CPUs.
+- An earlier version of the cipher tables in this README, and of `tools/suggest-cipher.sh`, compared with the serial ChaCha or with raw single-threaded speed. That overstated AES-GCM's lead over the default.
 
 ### Choice of MAC
 
@@ -382,9 +472,9 @@ It then says how to use the lines and repeats a few notes. With `--config` the o
 
 ### How it chooses
 
-1. **Measured, when it can.** It runs `openssl speed -evp` for AES-256-GCM and ChaCha20-Poly1305 on one core with 16 KiB blocks, and puts the faster one first. It needs an `openssl` that supports `speed -mr -elapsed -seconds -bytes`. OpenSSL 3.5 and 4.1 were tried. Apple's LibreSSL (`/usr/bin/openssl`) does not support these options, so on a Mac without a Homebrew `openssl` on the path the script falls back to the CPU features.
+1. **Measured, when it can.** It runs `openssl speed -evp` for AES-256-GCM and ChaCha20-Poly1305 on one core with 16 KiB blocks, and puts the faster one first. This times OpenSSL's single-threaded ChaCha. HPN-SSH's default ChaCha is multithreaded and much faster end to end, so on a CPU with AES instructions the real lead of AES-GCM is a few percent, not the raw ratio. It needs an `openssl` that supports `speed -mr -elapsed -seconds -bytes`. OpenSSL 3.5 and 4.1 were tried. Apple's LibreSSL (`/usr/bin/openssl`) does not support these options, so on a Mac without a Homebrew `openssl` on the path the script falls back to the CPU features.
 2. **From the CPU, otherwise.** With `--no-measure`, or no usable `openssl`, a CPU with AES instructions gets AES-GCM first and one without gets ChaCha20-Poly1305 first. If it cannot read the CPU, it keeps HPN-SSH's default order, which is ChaCha first.
-3. **`aes256-ctr` is always last.** With its MAC counted it was slower than AES-256-GCM on every machine measured (see [Choice of MAC](#choice-of-mac) and the [Performance](#performance) tables), so it is there only for a peer that offers nothing else. Its raw speed is printed for information, but it does not take part in the choice.
+3. **`aes256-ctr` is always last.** It needs a separate MAC and, once that is counted, it was ahead of AES-256-GCM on one machine and behind on the other (see [Cipher choice end to end](#cipher-choice-end-to-end)), so it is there only for a peer that offers nothing else. Its raw speed is printed for information, but it does not take part in the choice.
 4. **The MAC line is fixed.** Only the `aes-ctr` ciphers use a separate MAC (AES-GCM and ChaCha20-Poly1305 carry their own authentication), and `umac-64-etm@openssh.com` was the fastest in the MAC tests, so it stays first.
 
 The two ciphers it compares come in both orders in the output:
@@ -405,7 +495,7 @@ The two ciphers it compares come in both orders in the output:
 ### Limits
 
 - It times **one core**, not a connection. The end-to-end speed also depends on the other end, the network, the MAC and, on a long path, the TCP buffer limit (see [Tuning the TCP stack](#tuning-the-tcp-stack)).
-- It was run on an Apple M1 Max and an Intel Xeon E5-2630 v4, both with AES instructions, where AES-GCM led by 1.7 to 3.7 times per core. The path for a CPU without AES instructions is checked by the tests with stand-in data, not on real hardware.
+- It was run on an Apple M1 Max and an Intel Xeon E5-2630 v4, both with AES instructions. Raw, AES-GCM led single-threaded ChaCha by 1.7 to 3.7 times per core, but end to end it led HPN-SSH's default multithreaded ChaCha by only 5 to 6 percent (see [Cipher choice end to end](#cipher-choice-end-to-end)), so expect a small gain. The path for a CPU without AES instructions is checked by the tests with stand-in data, not on real hardware, and it is on such a CPU that the choice matters most.
 - `aes128-gcm` is in the list but has not been timed.
 - Its tests are in `tests/run-tests.sh`: the choice from measured speeds and from CPU features, the `--config` output, bad input, and that `hpnssh` accepts every name it prints.
 
@@ -442,6 +532,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0017 | `version`: add the sphynx version to the release string. | 0.0.3 | fork only |
 | 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
 | 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
+| 0020 | `cipher-ctr-mt-provider`: read the cipher state through the `EVP_CIPHER_CTX`, which fixes a crash with OpenSSL 4.1. | 0.5.3 | self-contained |
 
 Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
 
@@ -474,7 +565,7 @@ Put the new commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, s
 
 ### Sending a patch upstream
 
-Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patch 0019 is a performance change that stands on its own.
+Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patch 0019 is a performance change and patch 0020 a bug fix, and both stand on their own.
 
 ### How the series was made
 

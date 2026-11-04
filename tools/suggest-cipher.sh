@@ -143,7 +143,8 @@ echo
 cat <<'EOF'
 Notes:
   - The MACs line only matters with the aes-ctr ciphers. aes-gcm and chacha20-poly1305 carry their own authentication.
-  - aes256-ctr is last because, with its MAC, it was slower than aes256-gcm on every machine measured.
+  - aes256-ctr is last because it needs a separate MAC and was not ahead of aes256-gcm on every machine measured.
+  - The ChaCha speed above is single-threaded. HPN-SSH's default ChaCha is multithreaded, so end to end AES-GCM's lead is a few percent, not this ratio.
   - On a long path the TCP buffer limit, not the cipher, sets the speed; see tools/tune-tcp.sh.
   - This times one core. HPN-SSH's end-to-end speed also depends on the other ends, the network and the MAC.
 EOF

@@ -5,7 +5,7 @@ Subject: [PATCH] version: add the sphynx version to the release string
 
 Fork-specific, not for upstream. SSH_SPHYNX is the version of the sphynx
 packaging, so the release string reads for example
-OpenSSH_10.6p1_hpn18.12.0_sphynx0.4.7. It is in the SSH banner, in
+OpenSSH_10.6p1_hpn18.12.0_sphynx0.5.3. It is in the SSH banner, in
 "ssh -V", and matched by "Match version". sphynx build refuses to build if
 this tag and its own version disagree.
 
@@ -27,5 +27,5 @@ index 0e40da38f..ff4e3fe8c 100644
  #define SSH_PORTABLE	"p1"
  #define SSH_HPN         "_hpn18.12.0"
 -#define SSH_RELEASE	SSH_VERSION SSH_PORTABLE SSH_HPN
-+#define SSH_SPHYNX      "_sphynx0.4.7"
++#define SSH_SPHYNX      "_sphynx0.5.3"
 +#define SSH_RELEASE	SSH_VERSION SSH_PORTABLE SSH_HPN SSH_SPHYNX

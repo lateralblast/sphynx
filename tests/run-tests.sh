@@ -297,7 +297,7 @@ pass "config files are marked as conffiles"
 
 tree="$TEST_DIR/build/ubuntu/src"
 
-for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt; do
+for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt aes_ctr_mt_init; do
     tests/build-c-test.sh "$tree" "tests/c/$t.c" "$TEST_DIR/$t" >"$TEST_DIR/$t.build" 2>&1 \
         || { tail -n 20 "$TEST_DIR/$t.build" >&2; fail "could not build tests/c/$t.c"; }
     "$TEST_DIR/$t" >"$TEST_DIR/$t.out" 2>&1 \
