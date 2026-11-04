@@ -29,9 +29,22 @@ state="$STUB_STATE"
 case "$1" in
     -n) cat "$state/$2" ;;
     -w) k="${2%%=*}"; printf '%s\n' "${2#*=}" >"$state/$k" ;;
+    -p) while IFS= read -r l; do
+            case "$l" in \#*|"") ;; *) printf '%s\n' "${l#* = }" >"$state/${l%% = *}" ;; esac
+        done <"$2" ;;
     *) exit 1 ;;
 esac
 STUB
+# a stand-in for modprobe: it succeeds, and adds the algorithm to the available list,
+# only for a module whose name has a "loadable_<module>" file in the state directory
+cat >"$stub/bin/modprobe" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >>"$STUB_STATE/modprobe.log"
+[ -e "$STUB_STATE/loadable_$1" ] || exit 1
+f="$STUB_STATE/net.ipv4.tcp_available_congestion_control"
+printf '%s %s\n' "$(cat "$f")" "${1#tcp_}" >"$f"
+STUB
+chmod +x "$stub/bin/modprobe"
 printf '#!/usr/bin/env bash\nexec "$@"\n' >"$stub/bin/sudo"
 chmod +x "$stub/bin/sysctl" "$stub/bin/sudo"
 
@@ -142,6 +155,81 @@ for c in persist revert; do
     else fail "macOS $c: $out"; fi
 done
 
+# --- congestion control (Linux), against the stand-in sysctl and modprobe -----------
+
+mkdir -p "$stub/proc" "$stub/modules" "$stub/sysctl.d"
+: >"$stub/proc/tcp_wmem"
+lin_reset() {
+    printf '%s\n' "4096 16384 4194304" >"$stub/state/net.ipv4.tcp_wmem"
+    printf '%s\n' "4096 131072 6291456" >"$stub/state/net.ipv4.tcp_rmem"
+    printf '%s\n' cubic >"$stub/state/net.ipv4.tcp_congestion_control"
+    printf '%s\n' "reno cubic" >"$stub/state/net.ipv4.tcp_available_congestion_control"
+    rm -f "$stub/state/modprobe.log" "$stub/state/loadable_tcp_bbr" "$stub/modules/"* "$stub/sysctl.d/"*
+}
+lin() {
+    STUB_STATE="$stub/state" TUNE_TCP_OS=Linux TUNE_TCP_PROC="$stub/proc" TUNE_TCP_MODULES_DIR="$stub/modules" \
+        PATH="$stub/bin:$PATH" "$TUNE" "$@"
+}
+cc_now() { cat "$stub/state/net.ipv4.tcp_congestion_control"; }
+
+lin_reset; printf '%s\n' "reno cubic bbr" >"$stub/state/net.ipv4.tcp_available_congestion_control"
+out="$(lin show --cc bbr)"
+if grep -q 'net.ipv4.tcp_congestion_control *cubic  ->  bbr' <<<"$out" && grep -q 'net.ipv4.tcp_wmem' <<<"$out" && ! grep -q 'modprobe' <<<"$out"; then
+    pass "--cc bbr: show adds the congestion control to the plan, next to the buffers"
+else fail "--cc show: $out"; fi
+out="$(lin show --cc bbr --cc-only)"
+if grep -q 'tcp_congestion_control' <<<"$out" && ! grep -q 'target maximum' <<<"$out" && ! grep -q 'tcp_wmem' <<<"$out"; then
+    pass "--cc-only plans the congestion control and nothing else"
+else fail "--cc-only show: $out"; fi
+
+lin_reset
+out="$(lin show --cc bbr --cc-only)"
+if grep -q "bbr is not loaded; apply loads it with 'modprobe tcp_bbr'" <<<"$out"; then
+    pass "show says when the module has to be loaded"
+else fail "module note: $out"; fi
+
+touch "$stub/state/loadable_tcp_bbr"
+out="$(lin apply --yes --cc bbr --cc-only 2>&1)"
+if [ "$(cc_now)" = bbr ] && grep -q '^tcp_bbr$' "$stub/state/modprobe.log" \
+   && grep -q 'sudo sysctl -w net.ipv4.tcp_congestion_control="cubic"' <<<"$out"; then
+    pass "apply loads the module, sets the congestion control and prints how to put cubic back"
+else fail "apply --cc: cc=$(cc_now) log=$(cat "$stub/state/modprobe.log" 2>&1) out=$out"; fi
+out="$(lin apply --yes --cc bbr --cc-only 2>&1)"
+if grep -q 'nothing to change' <<<"$out"; then pass "applying the same congestion control again changes nothing"
+else fail "reapply: $out"; fi
+
+lin_reset
+if out="$(lin apply --yes --cc bbr --cc-only 2>&1)"; then fail "apply succeeded with a module that will not load: $out"
+elif [ "$(cc_now)" = cubic ] && grep -q 'could not load tcp_bbr' <<<"$out"; then
+    pass "a congestion control that will not load is an error, and nothing is changed"
+else fail "unloadable cc: cc=$(cc_now) out=$out"; fi
+
+lin_reset; touch "$stub/state/loadable_tcp_bbr"
+lin persist --yes --cc bbr --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+f="$stub/sysctl.d/99-hpn-ssh-tcp.conf"
+if [ "$(cc_now)" = bbr ] && grep -q '^net.ipv4.tcp_congestion_control = bbr$' "$f" \
+   && grep -q '^# previous net.ipv4.tcp_congestion_control = cubic$' "$f" \
+   && grep -q '^net.ipv4.tcp_wmem = 4096 16384 ' "$f" \
+   && grep -q '^tcp_bbr$' "$stub/modules/99-hpn-ssh-tcp.conf"; then
+    pass "persist writes the congestion control and the previous one, and a modules-load file for it"
+else fail "persist --cc: cc=$(cc_now) file=$(cat "$f" 2>&1) modules=$(cat "$stub/modules/"* 2>&1)"; fi
+lin revert --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+if [ "$(cc_now)" = cubic ] && [ ! -e "$f" ] && [ ! -e "$stub/modules/99-hpn-ssh-tcp.conf" ] \
+   && [ "$(cat "$stub/state/net.ipv4.tcp_wmem")" = "4096 16384 4194304" ]; then
+    pass "revert puts the congestion control and the buffers back and removes both files"
+else fail "revert --cc: cc=$(cc_now) wmem=$(cat "$stub/state/net.ipv4.tcp_wmem") files=$(ls "$stub/sysctl.d" "$stub/modules")"; fi
+
+lin_reset
+lin persist --yes --cc cubic --cc-only --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+if [ -z "$(ls "$stub/modules")" ]; then pass "persist writes no modules-load file for a built-in congestion control"
+else fail "cubic module file: $(ls "$stub/modules")"; fi
+
+for bad in "--cc Bad;name" "--cc-only"; do
+    # shellcheck disable=SC2086 # the options are meant to split
+    if lin show $bad >/dev/null 2>&1; then fail "accepted: $bad"; else pass "rejected: $bad"; fi
+done
+if mac show --cc bbr >/dev/null 2>&1; then fail "--cc accepted on macOS"; else pass "--cc is refused on macOS"; fi
+
 # --- Linux, needs sudo: inside a throwaway namespace -----------------------------
 
 if [ $linux = 0 ]; then
@@ -217,6 +305,14 @@ inns "$TUNE" apply --yes --send-only --max 33554432 >/dev/null 2>&1
 if [ "$(get net.ipv4.tcp_wmem)" = "4096 16384 33554432" ] && [ "$(get net.ipv4.tcp_rmem)" = "$R0" ]; then
     pass "--send-only leaves tcp_rmem alone"
 else fail "--send-only: wmem=$(get net.ipv4.tcp_wmem) rmem=$(get net.ipv4.tcp_rmem)"; fi
+
+# reno is built into every kernel, so this sets a real congestion control without loading a module
+host_cc="$(sysctl -n net.ipv4.tcp_congestion_control)"
+inns sysctl -w net.ipv4.tcp_congestion_control=cubic >/dev/null 2>&1
+inns "$TUNE" apply --yes --cc reno --cc-only >/dev/null 2>&1
+if [ "$(get net.ipv4.tcp_congestion_control)" = reno ] && [ "$(sysctl -n net.ipv4.tcp_congestion_control)" = "$host_cc" ]; then
+    pass "--cc sets the congestion control in the namespace and not on the host"
+else fail "--cc in a namespace: ns=$(get net.ipv4.tcp_congestion_control) host=$(sysctl -n net.ipv4.tcp_congestion_control) (was $host_cc)"; fi
 
 echo "$failures failure(s)"
 [ $failures -eq 0 ]

@@ -4,6 +4,36 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-11-04
+
+### Added
+
+- The README's "Packet loss and congestion control" section has a faster case: an emulated 10 Gbit/s, 30 ms path with loss and jitter. 5 ms of jitter (which reorders packets) with no loss cut `cubic` from 303 to 114 MB/s, while `bbr` stayed at 301; with 0.02 % loss as well, `cubic` fell to 67 MB/s and `bbr` held 298. This closes the jitter part of the earlier TODO item. It is an emulation on one machine, not a real link.
+
+## [0.5.7] - 2026-11-04
+
+### Added
+
+- The README has a "Packet size" section and `RESEARCH.md` records the result for the default cipher: 64 KiB packets do not speed up the multithreaded ChaCha (567 against 570 MB/s on x86-64), and only the serial ChaCha gains (about 9 percent), so the change is not worth making. The TODO item on packet size is closed.
+
+## [0.5.6] - 2026-11-04
+
+### Added
+
+- The README has a "Where the time goes" section: a `perf` profile of the client and server on Linux x86-64 during a loopback transfer. About 85 percent of the sender is the kernel and the cipher. The part the program controls is about 5 percent `memcpy` and 3.5 percent `memset` in the `sshbuf` packet buffers, and a 32 KiB zero-fill in the server (removed in 0.5.5). The TODO item to profile on Linux is closed.
+
+## [0.5.5] - 2026-11-04
+
+### Changed
+
+- `hpnsshd` and `hpnssh` no longer zero a 32 KiB buffer on every pass of their event loop. `channel_handle_efd_read` in `sphynx-ssh/channels.c` declared its read buffer before an early return, and the build's `-ftrivial-auto-var-init=zero` zeroes it where it is declared, so each call wrote 32 KiB for nothing. A `perf` profile of the server put 5.2 percent of its samples there; `memset` fell from 8.5 to 4.8 percent of the server's samples. Throughput did not change in a loopback test, which the sender limits, so this saves server CPU. This is patch 0021.
+
+## [0.5.4] - 2026-11-04
+
+### Added
+
+- `tools/tune-tcp.sh` can set the congestion control on Linux: `--cc bbr` adds `net.ipv4.tcp_congestion_control` to what `show`, `apply` and `persist` do, and `--cc-only` leaves the buffer maximums alone. It loads `tcp_bbr` with `modprobe` if it is not loaded, `persist` writes it to `/etc/sysctl.d/99-hpn-ssh-tcp.conf` with a `/etc/modules-load.d/99-hpn-ssh-tcp.conf` entry for the module, and `revert` puts back the previous algorithm and removes both files. It is refused on macOS. With `bbr`, HPN-SSH kept its speed under loss and jitter where the default `cubic` did not (see the README). `tests/tune-tcp.sh` checks it against a stand-in `sysctl` and `modprobe`, and sets a real congestion control in a throwaway namespace.
+
 ## [0.5.3] - 2026-11-04
 
 ### Fixed

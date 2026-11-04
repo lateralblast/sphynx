@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 0.5.3
+Version: 0.5.8
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -235,6 +235,19 @@ An earlier, smaller run (128 MB, 2 runs, runs over 150 seconds counted as `t/o`)
 | 0.5 % | `cubic` | t/o (runs 1.1 and t/o) | t/o |
 | 0.5 % | `bbr` | 23.9 MB/s | 52.9 MB/s |
 
+**A faster path, with loss and jitter.** The same test on an emulated 10 Gbit/s, 30 ms path (buffers 128 MiB, 512 MB per run, 3 runs, HPN-SSH, `aes256-gcm`, MB/s). Jitter is `netem`'s random delay variation, which also **reorders** packets, applied in each direction. There is no second fast host here, so this is an emulation on one machine (the transfer is short and the ramp-up is part of each figure, which is why these are about half of the loopback speed).
+
+| Jitter | Loss per direction | `cubic`, median (runs) | `bbr`, median (runs) |
+|---|---|---|---|
+| none | none | 303 (287, 303, 316) | 323 (323, 325, 300) |
+| none | 0.02 % | 240 (278, 240, 227) | 303 (301, 303, 313) |
+| 5 ms | none | 114 (114, 100, 164) | 301 (303, 301, 293) |
+| 5 ms | 0.02 % | 67 (26, 67, 68) | 298 (294, 298, 302) |
+
+- **Reordering hurts `cubic` more than loss does.** 5 ms of jitter with no loss at all cut it by 62 percent, because the kernel can read reordered packets as lost ones. `bbr` did not move: 301 MB/s with the jitter against 323 without.
+- With both, `cubic` fell to 67 MB/s (one run 26) and `bbr` held 298, about 4.5 times as fast.
+- This is an emulated path with one flow. A real path's reordering and jitter differ from `netem`'s, and competing flows were not tried.
+
 - **`bbr` held the clean-link speed at every loss rate tried, up to 0.5 % per direction.** `cubic` was 15 percent behind at 0.05 %, became erratic from 0.1 % (some runs stalled for over a minute), and at 0.5 % did not finish in 150 seconds for either program.
 - **Both programs are limited by `cubic` the same way, but HPN-SSH starts from much higher.** With `bbr` at 0.5 % HPN-SSH kept 53 MB/s against OpenSSH's 24 MB/s.
 - **`bbr` is a setting on the sending host, not an HPN-SSH option.** For an upload it is the client's kernel, for a download the server's. On Linux: `sudo modprobe tcp_bbr`, then `sudo sysctl -w net.ipv4.tcp_congestion_control=bbr`. `tools/tune-tcp.sh` does not set it. It is listed in `TODO.md`.
@@ -274,6 +287,50 @@ HPN-SSH to HPN-SSH over loopback, 0.4.7, all five ciphers, median of 5 runs (MB/
 - `aes256-ctr` is ahead of AES-256-GCM on the Mac and behind it on x86-64. It includes the faster XOR loop from 0.4.5. Which is best changes with the machine, so do not read a lead of a few percent as a rule.
 - One machine of each kind, loopback only, so the client and server share CPUs.
 - An earlier version of the cipher tables in this README, and of `tools/suggest-cipher.sh`, compared with the serial ChaCha or with raw single-threaded speed. That overstated AES-GCM's lead over the default.
+
+### Where the time goes
+
+A `perf` profile of the client (`hpnssh`) and the server session (`hpnsshd-session`) during a loopback transfer on the x86-64 server, `aes256-gcm`, with DWARF call graphs. Each figure is a share of the samples of that process in one run, so treat differences of a point or two as noise. (The cipher threads of `aes256-ctr` and the multithreaded ChaCha add to this; the profile was taken for AES-GCM, which has none, and the other two ciphers showed the same pattern for the copy and clear costs below.)
+
+| Where | Client (sender) | Server (receiver) |
+|---|---|---|
+| Kernel | 53 % | 46 % |
+| `libcrypto` (the cipher and its authentication) | 32 % | 36 % |
+| `libc` (`memcpy`, `memset`) | 10 % | 13 % |
+| `hpnssh` or `hpnsshd-session` itself | 4 % | 5 % |
+
+The biggest single items, and who calls them:
+
+| Cost | Client | Server |
+|---|---|---|
+| Kernel copy between the program and the socket (`rep_movs_alternative`) | 9.2 % | 8.2 % |
+| `memcpy` of the channel data into or out of the packet buffer (`sshbuf_put_string` on the client, `sshbuf_put` on the server) | 5.0 % | 4.1 % |
+| `memset` zeroing a buffer, all callers | 3.6 % | 8.9 % |
+| of which `recallocarray`, from `sshbuf_allocate` on the client and `sshbuf_reset` on the server | 3.5 % | 2.3 % |
+| of which the 32 KiB zero-fill in `channel_handle_efd_read` | none | 5.2 % (removed in 0.5.5) |
+| Kernel zeroing new pages (`kernel_init_pages`) | 4.8 % | 3.7 % |
+| System call entry and exit | 1.6 % | 4.6 % |
+
+- **About 85 percent of the sender is the kernel and the cipher,** which the program does not control. The part it does is the copying and clearing: about 5 percent of `memcpy` and about 3.5 percent of `memset`, both in the `sshbuf` packet buffers.
+- **`sshbuf_reset` and `sshbuf_allocate` churn.** After each packet the packet buffer is zeroed over its whole size and shrunk back to 256 bytes (`recallocarray`), and the next packet grows it again, so every 32 KiB packet pays a zero-fill and a copy more than it has to. This is OpenSSH's behaviour, and the zeroing is deliberate: the buffers hold plaintext and keys. A change would have to keep clearing what was written. It is in `TODO.md`.
+- **`kernel_init_pages` is Ubuntu's `init_on_alloc`,** which zeroes every page the kernel allocates. It is not something `sshd` can change.
+- **The sender is the limit in a loopback test.** Taking 5 percent out of the server did not change the throughput (see patch 0021), which is what you would expect if the sender is the limit. A faster transfer would need less work per byte on the sending thread, or more threads on it.
+- One run per cipher on one machine, on a stripped `libcrypto`, so the cipher's own time is not split further.
+
+### Packet size
+
+HPN-SSH sends 32 KiB packets. Larger packets mean fewer system calls and less per-packet work, but they need `SSH_IOBUFSZ`, `CHAN_SES_PACKET_DEFAULT` and the ChaCha keystream length changed together (a bigger packet alone is refused with `Bad packet length`). I built 64 KiB packets and compared them with the current build over loopback on the x86-64 server (median of 5 runs of 2048 MB, MB/s):
+
+| Cipher | 32 KiB (current) | 64 KiB |
+|---|---|---|
+| `chacha20-poly1305-mt@hpnssh.org` (default) | 567 | 570 |
+| `chacha20-poly1305@openssh.com` (serial) | 470 | 511 |
+| `aes256-gcm@openssh.com` | 597 | 614 |
+| `aes256-ctr` | 566 | 566 |
+
+- **Not worth changing.** The default multithreaded ChaCha does not gain, and the other differences are inside the spread between runs (about 10 percent), except the serial ChaCha, which gained 9 percent here and 9 to 17 percent on two arm64 machines. The serial ChaCha is only used against a peer that lacks the multithreaded one.
+- A bigger packet also raises memory per connection, which the code lowers after login on purpose for high bandwidth-delay paths, and an OpenSSH peer would still send 32 KiB.
+- Details and the arm64 results are in `RESEARCH.md`.
 
 ### Choice of MAC
 
@@ -387,7 +444,7 @@ In the `skmem:(...)` line, `tb` is the send buffer size and `rb` is the receive 
 
 ### Using the script
 
-`tools/tune-tcp.sh` does steps 2 to 4 for you. It only ever raises a maximum and never lowers one, it changes nothing else, and it shows you what it will change before it does anything. Run it as yourself: it asks for `sudo` when it needs it.
+`tools/tune-tcp.sh` does steps 2 to 4 for you. It only ever raises a maximum and never lowers one, it changes nothing else unless you ask for a congestion control with `--cc`, and it shows you what it will change before it does anything. Run it as yourself: it asks for `sudo` when it needs it.
 
 ```sh
 tools/tune-tcp.sh show                                          # what would change; needs no privileges
@@ -395,14 +452,16 @@ tools/tune-tcp.sh show --bandwidth 1gbit --rtt 100ms            # size the maxim
 tools/tune-tcp.sh apply --bandwidth 1gbit --rtt 100ms           # set it now, until the next reboot
 tools/tune-tcp.sh persist --bandwidth 1gbit --rtt 100ms         # set it now and keep it across reboots (Linux)
 tools/tune-tcp.sh revert                                        # undo persist (Linux)
+tools/tune-tcp.sh persist --cc bbr                              # also use bbr, which keeps its speed on a lossy path (Linux)
+tools/tune-tcp.sh apply --cc bbr --cc-only                      # only the congestion control, not the buffers
 ```
 
 | Command | What it does |
 |---|---|
 | `show` | Prints the current values and what `apply` would change. Needs no privileges. |
 | `apply` | Sets the new maximums with `sysctl -w`. They last until the next reboot. It prints the commands that put the old values back. |
-| `persist` | Linux only. Does what `apply` does, and also writes `/etc/sysctl.d/99-hpn-ssh-tcp.conf`, which keeps the setting across reboots. The old values are recorded in that file. |
-| `revert` | Linux only. Puts back the values recorded by `persist` and removes the file. |
+| `persist` | Linux only. Does what `apply` does, and also writes `/etc/sysctl.d/99-hpn-ssh-tcp.conf`, which keeps the setting across reboots. The old values are recorded in that file. With `--cc` it also writes `/etc/modules-load.d/99-hpn-ssh-tcp.conf` so the module is loaded at boot. |
+| `revert` | Linux only. Puts back the values recorded by `persist` (the buffers and the congestion control) and removes both files. |
 
 | Option | Meaning |
 |---|---|
@@ -410,12 +469,31 @@ tools/tune-tcp.sh revert                                        # undo persist (
 | `--rtt TIME` | Round-trip time, for example `100ms` or `0.1s`. Give both this and `--bandwidth`, or neither. |
 | `--max BYTES` | Set the maximum directly. This overrides `--bandwidth` and `--rtt`. |
 | `--send-only` | Change only the send maximum (`net.ipv4.tcp_wmem`, or `net.inet.tcp.autosndbufmax` on macOS), not the receive one. |
+| `--cc NAME` | Linux only. Also set the congestion control, for example `bbr`. If it is not listed in `net.ipv4.tcp_available_congestion_control`, `apply` and `persist` load `tcp_NAME` with `modprobe` first. See [Congestion control](#congestion-control). |
+| `--cc-only` | With `--cc`, change only the congestion control and leave the buffer maximums alone. |
 | `--yes` | Do not ask for confirmation. Without a terminal, `apply` and `persist` refuse to run unless you pass this. |
 | `--conf-dir DIR` | Where `persist` writes its file. The default is `/etc/sysctl.d`. |
 
 With `--bandwidth` and `--rtt`, the maximum is 2.5 times the bandwidth-delay product, rounded up to a whole MiB, at least 4 MiB and at most 256 MiB. For 1 Gbit/s at 100 ms that is 30 MiB. Without them the maximum is 32 MiB, the same as the example file. If the current maximum is already at least that large, it is left alone and the script says so.
 
 `persist` writes the same file name as the example in `/usr/share/doc/hpn-ssh/examples/`, so the two do not stack up. Running `persist` again with a different size keeps the values from before the first run, so `revert` always goes back to the original. This is a system-wide setting: run the script on both ends of the connection if you want both ends changed.
+
+### Congestion control
+
+On a path that loses or reorders packets, the kernel's congestion control matters as much as the buffer size, and Linux's default, `cubic`, does badly there (see [Packet loss and congestion control](#packet-loss-and-congestion-control): `bbr` kept its clean-link speed where `cubic` lost 15 to 60 percent or stalled). `--cc bbr` sets it:
+
+```sh
+tools/tune-tcp.sh show --cc bbr --bandwidth 1gbit --rtt 100ms   # the buffers and the congestion control
+tools/tune-tcp.sh persist --cc bbr --cc-only                  # only the congestion control, kept across reboots
+```
+
+- It changes `net.ipv4.tcp_congestion_control` for **every connection from this machine**, not only HPN-SSH's, and it changes how the machine shares a link with other traffic. The script says so when it asks to go ahead.
+- It is a setting on the **sending** host. For an upload that is the client's kernel and for a download the server's, so set it on whichever sends the bulk data.
+- If the algorithm is not loaded, `apply` and `persist` run `modprobe tcp_bbr` first and stop with an error if that fails. `show` only says that it would.
+- `persist` writes the setting to the same `/etc/sysctl.d/99-hpn-ssh-tcp.conf`, records the algorithm it replaced (`# previous net.ipv4.tcp_congestion_control = cubic`), and writes `/etc/modules-load.d/99-hpn-ssh-tcp.conf` so `tcp_bbr` is loaded at boot. `revert` puts `cubic` back and removes both files. `reno` and `cubic` are built into the kernel, so no modules file is written for them.
+- It does not change the qdisc. The kernel paces `bbr` itself, and `fq` did not help it in the tests.
+- On macOS it is refused: macOS has no `bbr`.
+- It has not been measured on a real lossy path or against competing flows, where `bbr` can take more than its share from `cubic` flows. Try it on your own path before changing a shared server.
 
 **macOS.** The script works on Linux and macOS. macOS has no `net.ipv4.tcp_wmem`. Its limits are `net.inet.tcp.autosndbufmax` and `net.inet.tcp.autorcvbufmax` (4 MB by default, the send and receive maximums an auto-tuned connection can grow to) and `kern.ipc.maxsockbuf` (8 MB by default, the cap on any socket buffer). The script raises the first two to the target, and raises `kern.ipc.maxsockbuf` to 9/8 of the target, because the kernel counts overhead against the cap, so a cap equal to the target would hold less than the target. macOS refuses a `kern.ipc.maxsockbuf` above 32 MiB (`Result too large`), so on macOS the target is limited to 28 MiB, and the script says so when it lowers a larger one. That covers the 32 MiB default and a 1 Gbit/s path up to about 90 ms. As on Linux it only raises values. macOS has no `sysctl.d`, so `persist` and `revert` are refused: a setting from `apply` lasts until the next reboot, and to set it at every boot you need to run `tools/tune-tcp.sh apply --yes` from a LaunchDaemon. The effect of the macOS settings on a long path is not measured, see [Performance on macOS](#performance-on-macos).
 
@@ -427,7 +505,7 @@ The script has tests in `tests/tune-tcp.sh`. The macOS checks run on any system,
 - **OpenSSH does not benefit.** Its fixed 2 MB channel window is what limits it, so raising the TCP limits changes nothing for it.
 - **`net.core.wmem_max` and `net.core.rmem_max`** only cap a program that sets its buffer size explicitly. They are not what limits autotuned connections, so you do not need to change them for this.
 - **HPN-SSH's `TcpRcvBufPoll` option** is on by default and should stay on for Linux, which autotunes buffers.
-- **Congestion control, packet loss and jitter** were not part of these measurements. A lossy path behaves differently from the clean path tested here.
+- **The buffer measurements above are on a clean path.** A lossy or jittery path behaves differently; see [Packet loss and congestion control](#packet-loss-and-congestion-control) and [Congestion control](#congestion-control).
 - **To undo it,** remove the file from `/etc/sysctl.d/` and set the old values back with `sysctl -w` (or reboot). `sysctl --system` reads the files that remain, but it does not reset a key whose file you removed.
 
 ## Choosing a cipher and MAC
@@ -533,6 +611,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
 | 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
 | 0020 | `cipher-ctr-mt-provider`: read the cipher state through the `EVP_CIPHER_CTX`, which fixes a crash with OpenSSL 4.1. | 0.5.3 | self-contained |
+| 0021 | `channels`: do not zero the 32 KiB extended data buffer on every pass of the event loop. | 0.5.5 | self-contained |
 
 Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
 
@@ -565,7 +644,7 @@ Put the new commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, s
 
 ### Sending a patch upstream
 
-Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patch 0019 is a performance change and patch 0020 a bug fix, and both stand on their own.
+Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patches 0019 and 0021 are performance changes and patch 0020 is a bug fix, and all three stand on their own.
 
 ### How the series was made
 

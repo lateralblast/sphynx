@@ -6,7 +6,9 @@
 #   tools/tune-tcp.sh persist   apply, and keep them across reboots
 #   tools/tune-tcp.sh revert    put back what persist replaced
 #
-# It only ever raises a maximum, never lowers one, and changes nothing else.
+# It only ever raises a maximum, never lowers one, and changes nothing else,
+# unless you ask for a congestion control with --cc (Linux only, for example
+# bbr, which keeps its speed on a lossy path where the default cubic does not).
 # It works on Linux (net.ipv4.tcp_wmem and tcp_rmem) and on macOS
 # (net.inet.tcp.autosndbufmax, autorcvbufmax and kern.ipc.maxsockbuf). On macOS
 # there is no persist or revert: a setting lasts until the next reboot.
@@ -15,6 +17,9 @@ set -euo pipefail
 
 CONF_NAME=99-hpn-ssh-tcp.conf
 CONF_DIR=/etc/sysctl.d
+# persist also lists the congestion control's module here, so it is loaded at boot
+MODULES_DIR="${TUNE_TCP_MODULES_DIR:-/etc/modules-load.d}"
+CC_KEY=net.ipv4.tcp_congestion_control
 DEFAULT_MAX=33554432   # 32 MiB, covers 1 Gbit/s up to about 200 ms
 MIB=1048576
 
@@ -36,6 +41,10 @@ options:
   --max BYTES        set the maximum directly; overrides --bandwidth and --rtt
   --send-only        change only the send maximum (net.ipv4.tcp_wmem, or
                      net.inet.tcp.autosndbufmax on macOS), not the receive one
+  --cc NAME          also set the congestion control, for example bbr (Linux only). It loads
+                     the tcp_NAME module if needed. The default, cubic, slows badly on a lossy
+                     path; bbr does not. It changes how this machine shares a link.
+  --cc-only          with --cc, change only the congestion control, not the buffer maximums
   --yes              do not ask for confirmation
   --conf-dir DIR     where persist writes its file (default $CONF_DIR)
 
@@ -53,7 +62,7 @@ as_root() {
 # code on any machine with a stand-in for sysctl.
 OS="${TUNE_TCP_OS:-$(uname -s)}"
 case "$OS" in
-    Linux) [ -r /proc/sys/net/ipv4/tcp_wmem ] || die "no /proc/sys/net/ipv4/tcp_wmem" ;;
+    Linux) [ -r "${TUNE_TCP_PROC:-/proc/sys/net/ipv4}/tcp_wmem" ] || die "no /proc/sys/net/ipv4/tcp_wmem" ;;
     Darwin) ;;
     *) die "this needs Linux or macOS, not $OS" ;;
 esac
@@ -79,7 +88,7 @@ time_to_seconds() {
 # ---------------------------------------------------------------- state
 
 DARWIN_MAX_TARGET=$((28 * MIB))
-BANDWIDTH="" RTT="" MAX="" SEND_ONLY=0 ASSUME_YES=0
+BANDWIDTH="" RTT="" MAX="" SEND_ONLY=0 ASSUME_YES=0 CC="" CC_ONLY=0 CC_MODULE=""
 TARGET="" TARGET_NOTE=""
 
 compute_target() {
@@ -142,11 +151,19 @@ build_plan() {
         fi
         return 0
     fi
-    for key in net.ipv4.tcp_wmem net.ipv4.tcp_rmem; do
-        [ "$key" = net.ipv4.tcp_rmem ] && [ "$SEND_ONLY" = 1 ] && continue
-        read -r min def max < <(sysctl -n "$key")
-        plan_add "$key" "$min $def" "$max" "$(raised_max "$max")"
-    done
+    if [ "$CC_ONLY" != 1 ]; then
+        for key in net.ipv4.tcp_wmem net.ipv4.tcp_rmem; do
+            [ "$key" = net.ipv4.tcp_rmem ] && [ "$SEND_ONLY" = 1 ] && continue
+            read -r min def max < <(sysctl -n "$key")
+            plan_add "$key" "$min $def" "$max" "$(raised_max "$max")"
+        done
+    fi
+    if [ -n "$CC" ]; then
+        local avail; avail="$(sysctl -n net.ipv4.tcp_available_congestion_control)"
+        # a congestion control that is not listed is a module that is not loaded yet
+        if grep -qw -- "$CC" <<<"$avail"; then CC_MODULE=""; else CC_MODULE="tcp_$CC"; fi
+        plan_add "$CC_KEY" "" "$(sysctl -n "$CC_KEY")" "$CC"
+    fi
 }
 
 # setting_value PREFIX NUMBER: the string sysctl shows and accepts
@@ -154,27 +171,38 @@ setting_value() { echo "${1:+$1 }$2"; }
 
 print_plan() {
     local line key pre cur new
-    echo "target maximum: $TARGET bytes ($((TARGET / MIB)) MiB), $TARGET_NOTE"
+    [ "$CC_ONLY" = 1 ] || echo "target maximum: $TARGET bytes ($((TARGET / MIB)) MiB), $TARGET_NOTE"
     for line in "${PLAN[@]}"; do
         IFS='|' read -r key pre cur new <<<"$line"
         if [ "$new" != "$cur" ]; then
             printf '  %-28s %s  ->  %s\n' "$key" "$(setting_value "$pre" "$cur")" "$(setting_value "$pre" "$new")"
         else
-            printf '  %-28s %s  (already at least that large, left alone)\n' "$key" "$(setting_value "$pre" "$cur")"
+            if [ "$key" = "$CC_KEY" ]; then
+                printf '  %-28s %s  (already set)\n' "$key" "$cur"
+            else
+                printf '  %-28s %s  (already at least that large, left alone)\n' "$key" "$(setting_value "$pre" "$cur")"
+            fi
         fi
     done
+    [ -z "$CC_MODULE" ] || echo "  $CC is not loaded; apply loads it with 'modprobe $CC_MODULE'"
 }
 
 confirm() {
     [ "$ASSUME_YES" = 1 ] && return 0
     [ -t 0 ] || die "not a terminal; pass --yes to go ahead"
     echo "This changes system-wide TCP settings, for every program on this machine."
+    [ -z "$CC" ] || echo "The congestion control changes how every connection from this machine behaves on a shared link."
     read -r -p "Proceed? [y/N] " answer
     [[ "$answer" =~ ^[Yy]$ ]] || { echo "nothing changed"; exit 1; }
 }
 
 apply_plan() {
     local line key pre cur new
+    if [ -n "$CC_MODULE" ]; then
+        as_root modprobe "$CC_MODULE" || die "could not load $CC_MODULE, so $CC is not available (see: sysctl net.ipv4.tcp_available_congestion_control)"
+        grep -qw -- "$CC" <<<"$(sysctl -n net.ipv4.tcp_available_congestion_control)" \
+            || die "$CC is still not in net.ipv4.tcp_available_congestion_control after loading $CC_MODULE"
+    fi
     for line in "${PLAN[@]}"; do
         IFS='|' read -r key pre cur new <<<"$line"
         [ "$new" != "$cur" ] || continue
@@ -225,10 +253,10 @@ cmd_persist() {
     confirm
     # keep the values from before the first persist, so revert goes back to them
     local -A prev=()
-    local line key min def max new pre cur
+    local line key value new pre cur
     if [ -f "$file" ]; then
-        while read -r key min def max; do
-            prev["$key"]="$min $def $max"
+        while read -r key value; do
+            prev["$key"]="$value"
         done < <(previous_values "$file")
     fi
     local tmp; tmp="$(mktemp)"
@@ -238,33 +266,49 @@ cmd_persist() {
         echo "# Undo with: tools/tune-tcp.sh revert"
         for line in "${PLAN[@]}"; do
             IFS='|' read -r key pre cur new <<<"$line"
-            echo "$key = $pre $new"
+            echo "$key = $(setting_value "$pre" "$new")"
         done
         echo "#"
         echo "# Values before this file, used by 'tune-tcp.sh revert':"
         for line in "${PLAN[@]}"; do
             IFS='|' read -r key pre cur new <<<"$line"
-            echo "# previous $key = ${prev[$key]:-$pre $cur}"
+            echo "# previous $key = ${prev[$key]:-$(setting_value "$pre" "$cur")}"
         done
     } >"$tmp"
     as_root mkdir -p "$CONF_DIR"
     as_root install -m 644 "$tmp" "$file"
-    rm -f "$tmp"
+    if [ -n "$CC_MODULE" ]; then
+        as_root modprobe "$CC_MODULE" || die "could not load $CC_MODULE, so $CC is not available"
+    fi
     as_root sysctl -p "$file" >/dev/null
     echo "wrote $file and applied it."
+    # reno and cubic are built in; any other congestion control is a module to load at boot
+    if [ -n "$CC" ] && [ "$CC" != cubic ] && [ "$CC" != reno ]; then
+        local mfile="$MODULES_DIR/$CONF_NAME"
+        printf '# Written by tools/tune-tcp.sh from sphynx: loads tcp_%s at boot.\ntcp_%s\n' "$CC" "$CC" >"$tmp"
+        as_root mkdir -p "$MODULES_DIR"
+        as_root install -m 644 "$tmp" "$mfile"
+        echo "wrote $mfile so tcp_$CC is loaded at boot."
+    fi
+    rm -f "$tmp"
 }
 
 cmd_revert() {
     linux_only revert
     local file; file="$(conf_file)"
     [ -f "$file" ] || die "$file does not exist, so there is nothing to revert. For a setting made with 'apply', use the sysctl -w commands it printed, or reboot."
-    local key min def max restored=0
-    while read -r key min def max; do
-        as_root sysctl -w "$key=$min $def $max" >/dev/null
+    local key value restored=0
+    while read -r key value; do
+        as_root sysctl -w "$key=$value" >/dev/null
         restored=$((restored + 1))
     done < <(previous_values "$file")
     [ "$restored" -gt 0 ] || die "$file has no recorded previous values; remove it yourself and reboot"
     as_root rm -f "$file"
+    local mfile="$MODULES_DIR/$CONF_NAME"
+    if [ -f "$mfile" ]; then
+        as_root rm -f "$mfile"
+        echo "removed $mfile."
+    fi
     echo "restored $restored setting(s) and removed $file."
 }
 
@@ -283,10 +327,17 @@ while [ $# -gt 0 ]; do
         --rtt) RTT="${2:?--rtt needs a value}"; shift 2 ;;
         --max) MAX="${2:?--max needs a value}"; shift 2 ;;
         --send-only) SEND_ONLY=1; shift ;;
+        --cc) CC="${2:?--cc needs a name, for example bbr}"; shift 2 ;;
+        --cc-only) CC_ONLY=1; shift ;;
         --yes|-y) ASSUME_YES=1; shift ;;
         --conf-dir) CONF_DIR="${2:?--conf-dir needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
 done
+if [ -n "$CC" ]; then
+    [[ "$CC" =~ ^[a-z0-9_]+$ ]] || die "cannot read congestion control '$CC' (a name such as bbr or cubic)"
+    [ "$OS" = Linux ] || die "--cc works on Linux only"
+fi
+[ "$CC_ONLY" != 1 ] || [ -n "$CC" ] || die "--cc-only needs --cc"
 "cmd_$COMMAND"

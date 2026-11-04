@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Wed, 4 Nov 2026 19:30:00 +1100
+Subject: [PATCH] channels: do not zero the extended data buffer on every pass
+
+channel_handle_efd_read() declared its 32 KiB read buffer at the top of the
+function and returned early, before using it, whenever the extended data fd
+(a session's stderr) was not ready, which is nearly every pass of the event
+loop. The build's -ftrivial-auto-var-init=zero zeroes an automatic array where
+it is declared, so each call wrote 32 KiB of zeros for nothing.
+
+Declare the buffer after the early return.
+
+A perf profile of hpnsshd-session on Linux x86-64 during a loopback transfer
+put 5.2 percent of the process's samples in that memset, under
+channel_handle_efd_read(), and the total memset share fell from 8.5 to 4.8
+percent with this change. Throughput did not change in the loopback test,
+which the sending side limits, so this saves server CPU rather than speed.
+---
+ channels.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/channels.c b/channels.c
+index 4000fa803..f19390cec 100644
+--- a/channels.c
++++ b/channels.c
+@@ -2543,7 +2543,6 @@ channel_handle_efd_write(struct ssh *ssh, Channel *c)
+ static int
+ channel_handle_efd_read(struct ssh *ssh, Channel *c)
+ {
+-	char buf[CHAN_RBUF];
+ 	ssize_t len;
+ 	int r, force;
+ 
+@@ -2552,6 +2551,14 @@ channel_handle_efd_read(struct ssh *ssh, Channel *c)
+ 	if (!force && (c->io_ready & SSH_CHAN_IO_EFD_R) == 0)
+ 		return 1;
+ 
++	/*
++	 * Declared after the early return above, which is the common case:
++	 * this runs once per event loop pass for every session, and with
++	 * -ftrivial-auto-var-init=zero a buffer declared at the top is zeroed
++	 * (32 KiB) on every call, even when nothing is read.
++	 */
++	char buf[CHAN_RBUF];
++
+ 	len = read(c->efd, buf, sizeof(buf));
+ 	debug2("channel %d: read %zd from efd %d", c->self, len, c->efd);
+ 	if (len == -1 && (errno == EINTR || ((errno == EAGAIN ||
+-- 
+2.50.0
