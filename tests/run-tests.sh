@@ -56,7 +56,7 @@ pass "--jobs must be positive"
 # --- lint -----------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tests/package-lifecycle.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
+    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tests/package-lifecycle.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/suggest-cipher.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
     pass "shellcheck is clean"
 else
     echo "skip - shellcheck not installed"
@@ -146,6 +146,55 @@ else
     cat "$TEST_DIR/tune-tcp.out" >&2
     fail "tools/tune-tcp.sh tests"
 fi
+
+# --- tools/suggest-cipher.sh -------------------------------------------------
+
+sc_dir="$TEST_DIR/suggest"
+mkdir -p "$sc_dir"
+printf 'processor\t: 0\nmodel name\t: Test CPU\nflags\t\t: fpu sse2 aes avx2\n' >"$sc_dir/aes.cpuinfo"
+printf 'processor\t: 0\nmodel name\t: Test CPU\nflags\t\t: fpu sse2 avx2\n' >"$sc_dir/noaes.cpuinfo"
+printf 'processor : 0\nFeatures\t: fp asimd aes pmull sha2\n' >"$sc_dir/arm.cpuinfo"
+: >"$sc_dir/empty.cpuinfo"
+# a stand-in for openssl speed that reports fixed rates: GCM_RATE and CHACHA_RATE, bytes per second
+cat >"$sc_dir/openssl" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+    *AES-256-GCM*) echo "+F:25:AES-256-GCM:${GCM_RATE:-5000000000}.00" ;;
+    *ChaCha20-Poly1305*) echo "+F:26:ChaCha20-Poly1305:${CHACHA_RATE:-1000000000}.00" ;;
+    *AES-256-CTR*) echo "+F:27:AES-256-CTR:8000000000.00" ;;
+esac
+STUB
+chmod +x "$sc_dir/openssl"
+sc() { SUGGEST_OS=Linux "$@"; }
+first_cipher() { sed -n 's/^  Ciphers \([^,]*\),.*/\1/p' <<<"$1"; }
+
+# sc_expect WHAT FIRST-CIPHER TEXT: the output in $out must lead with that cipher and contain that text
+sc_expect() {
+    if [ "$(first_cipher "$out")" = "$2" ] && grep -q "$3" <<<"$out"; then :; else
+        fail "suggest-cipher: $1: $out"
+    fi
+}
+
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/aes.cpuinfo" SUGGEST_OPENSSL="$sc_dir/openssl" tools/suggest-cipher.sh)"
+sc_expect "AES-GCM should lead when it measures faster" aes256-gcm@openssh.com 'measured: aes256-gcm 5000 MB/s, chacha20-poly1305 1000 MB/s'
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/aes.cpuinfo" SUGGEST_OPENSSL="$sc_dir/openssl" GCM_RATE=500000000 tools/suggest-cipher.sh)"
+sc_expect "ChaCha should lead when it measures faster" chacha20-poly1305-mt@hpnssh.org 'measured: aes256-gcm 500 MB/s'
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/aes.cpuinfo" tools/suggest-cipher.sh --no-measure)"
+sc_expect "a CPU with AES should get AES-GCM first" aes256-gcm@openssh.com 'AES hardware:  yes'
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/noaes.cpuinfo" tools/suggest-cipher.sh --no-measure)"
+sc_expect "a CPU without AES should get ChaCha first" chacha20-poly1305-mt@hpnssh.org 'AES hardware:  no'
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/arm.cpuinfo" tools/suggest-cipher.sh --no-measure)"
+sc_expect "arm64 Features with aes" aes256-gcm@openssh.com 'AES hardware:  yes'
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/empty.cpuinfo" tools/suggest-cipher.sh --no-measure)"
+sc_expect "an unreadable CPU should keep the default order" chacha20-poly1305-mt@hpnssh.org 'could not tell'
+out="$(sc env SUGGEST_CPUINFO="$sc_dir/aes.cpuinfo" tools/suggest-cipher.sh --no-measure --config)"
+if [ "$(wc -l <<<"$out" | tr -d ' ')" = 2 ] && grep -q '^Ciphers aes256-gcm' <<<"$out" && grep -q '^MACs umac-64-etm@openssh.com,' <<<"$out"; then :; else
+    fail "suggest-cipher: --config should print the Ciphers and MACs lines only: $out"
+fi
+if tools/suggest-cipher.sh --nonsense >/dev/null 2>&1 || tools/suggest-cipher.sh --seconds 0 >/dev/null 2>&1; then
+    fail "suggest-cipher accepted bad input"
+fi
+pass "tools/suggest-cipher.sh picks AES-GCM or ChaCha from the measured speeds or the CPU features, and rejects bad input"
 
 # --- patches ---------------------------------------------------------------
 
@@ -248,7 +297,7 @@ pass "config files are marked as conffiles"
 
 tree="$TEST_DIR/build/ubuntu/src"
 
-for t in chachapoly_mt_bounds patch_list; do
+for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt; do
     tests/build-c-test.sh "$tree" "tests/c/$t.c" "$TEST_DIR/$t" >"$TEST_DIR/$t.build" 2>&1 \
         || { tail -n 20 "$TEST_DIR/$t.build" >&2; fail "could not build tests/c/$t.c"; }
     "$TEST_DIR/$t" >"$TEST_DIR/$t.out" 2>&1 \
@@ -260,6 +309,20 @@ if [ "$("$tree/hpnssh" -G -T -oNoneSwitch=yes -oNoneEnabled=yes localhost | grep
     fail "ssh -T must not turn off NoneSwitch"
 fi
 pass "ssh -T leaves NoneSwitch alone"
+
+sc_line="$(tools/suggest-cipher.sh --no-measure --config)"
+for opt in Ciphers MACs; do
+    value="$(sed -n "s/^$opt //p" <<<"$sc_line")"
+    # ssh -G prints the option in lower case, with the names it accepted
+    if "$tree/hpnssh" -G -o"$opt=$value" localhost >"$TEST_DIR/sc-$opt.out" 2>&1; then
+        got="$(sed -n "s/^$(tr '[:upper:]' '[:lower:]' <<<"$opt") //p" "$TEST_DIR/sc-$opt.out")"
+        [ -n "$value" ] && [ "$got" = "$value" ] \
+            || fail "hpnssh dropped or reordered names in the $opt line from tools/suggest-cipher.sh: $got"
+    else
+        fail "hpnssh does not accept the $opt line from tools/suggest-cipher.sh: $(cat "$TEST_DIR/sc-$opt.out")"
+    fi
+done
+pass "hpnssh accepts every name in the Ciphers and MACs lines from tools/suggest-cipher.sh"
 
 tests/scp-resume.sh "$tree/hpnscp" "$TEST_DIR/scp-resume" >"$TEST_DIR/scp-resume.out" 2>&1 \
     || { cat "$TEST_DIR/scp-resume.out" >&2; fail "scp -Z resume tests"; }

@@ -2,7 +2,7 @@
 # sphynx - build HPN-SSH from source and package it for target operating systems.
 set -euo pipefail
 
-SPHYNX_VERSION="0.4.4"
+SPHYNX_VERSION="0.4.7"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

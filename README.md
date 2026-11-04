@@ -1,6 +1,6 @@
 # sphynx
 
-Version: 0.4.4
+Version: 0.4.7
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -11,6 +11,7 @@ Sphynx is a wrapper that builds HPN-SSH from source and packages it for target o
 - [Output](#output)
 - [Performance](#performance)
 - [Tuning the TCP stack](#tuning-the-tcp-stack)
+- [Choosing a cipher and MAC](#choosing-a-cipher-and-mac)
 - [Patches](#patches)
 - [Build dependencies](#build-dependencies)
 - [Packaging details](#packaging-details)
@@ -199,6 +200,7 @@ With `aes256-ctr` the connection also needs a MAC (the AEAD ciphers `aes256-gcm`
 - The `-etm` forms are the safer design (they check the MAC before decrypting), and cost nothing measurable, so there is no reason to prefer the plain ones.
 - If you must use `hmac-sha2-256` for policy, expect about a quarter less throughput than the default on a fast link. On a link below a few hundred MB/s none of this matters.
 - Loopback only: the client and server share CPUs, and a long path is limited by the buffers, not the MAC.
+- To get a suggestion for your own CPU, see [Choosing a cipher and MAC](#choosing-a-cipher-and-mac).
 
 ### Performance on macOS
 
@@ -332,6 +334,75 @@ The script has tests in `tests/tune-tcp.sh`. The macOS checks run on any system,
 - **Congestion control, packet loss and jitter** were not part of these measurements. A lossy path behaves differently from the clean path tested here.
 - **To undo it,** remove the file from `/etc/sysctl.d/` and set the old values back with `sysctl -w` (or reboot). `sysctl --system` reads the files that remain, but it does not reset a key whose file you removed.
 
+## Choosing a cipher and MAC
+
+`tools/suggest-cipher.sh` looks at this machine's CPU and prints the `Ciphers` and `MACs` lines that suit it. It only prints: it changes no file and no setting, and needs no privileges. It works on Linux and macOS.
+
+```sh
+tools/suggest-cipher.sh               # time the ciphers (about 3 seconds), explain the choice
+tools/suggest-cipher.sh --config      # only the two lines, ready to paste into a config file
+tools/suggest-cipher.sh --no-measure  # decide from the CPU features alone, no timing
+tools/suggest-cipher.sh --seconds 5   # time each cipher for longer
+```
+
+| Option | Meaning |
+|---|---|
+| `--seconds N` | Time each cipher for N seconds. A whole number, at least 1. The default is 1. |
+| `--no-measure` | Do not run `openssl speed`. Choose from the CPU features: `aes` in `/proc/cpuinfo` on Linux, the `hw.optional.arm.FEAT_AES` or `machdep.cpu.features` `sysctl` values on macOS. |
+| `--config` | Print only the `Ciphers` and `MACs` lines, with no explanation. |
+| `-h`, `--help` | Print the usage. |
+
+An unknown option, or a `--seconds` that is not a whole number of at least 1, is an error. Otherwise the exit status is 0.
+
+### What it prints
+
+On an Apple M1 Max:
+
+```
+CPU:           Apple M1 Max (arm64)
+AES hardware:  yes
+Raw speed, one core, 16 KiB blocks (openssl speed):
+  aes256-gcm          6536 MB/s
+  chacha20-poly1305   1799 MB/s
+  aes256-ctr          9362 MB/s (before the MAC it needs)
+
+Suggested: AES-GCM first (measured: aes256-gcm 6536 MB/s, chacha20-poly1305 1799 MB/s per core).
+
+  Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,chacha20-poly1305-mt@hpnssh.org,chacha20-poly1305@openssh.com,aes256-ctr
+  MACs umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+```
+
+It then says how to use the lines and repeats a few notes. With `--config` the output is exactly the last two lines, without the two leading spaces.
+
+### How it chooses
+
+1. **Measured, when it can.** It runs `openssl speed -evp` for AES-256-GCM and ChaCha20-Poly1305 on one core with 16 KiB blocks, and puts the faster one first. It needs an `openssl` that supports `speed -mr -elapsed -seconds -bytes`. OpenSSL 3.5 and 4.1 were tried. Apple's LibreSSL (`/usr/bin/openssl`) does not support these options, so on a Mac without a Homebrew `openssl` on the path the script falls back to the CPU features.
+2. **From the CPU, otherwise.** With `--no-measure`, or no usable `openssl`, a CPU with AES instructions gets AES-GCM first and one without gets ChaCha20-Poly1305 first. If it cannot read the CPU, it keeps HPN-SSH's default order, which is ChaCha first.
+3. **`aes256-ctr` is always last.** With its MAC counted it was slower than AES-256-GCM on every machine measured (see [Choice of MAC](#choice-of-mac) and the [Performance](#performance) tables), so it is there only for a peer that offers nothing else. Its raw speed is printed for information, but it does not take part in the choice.
+4. **The MAC line is fixed.** Only the `aes-ctr` ciphers use a separate MAC (AES-GCM and ChaCha20-Poly1305 carry their own authentication), and `umac-64-etm@openssh.com` was the fastest in the MAC tests, so it stays first.
+
+The two ciphers it compares come in both orders in the output:
+
+| Order | Ciphers line |
+|---|---|
+| AES-GCM first | `aes256-gcm@openssh.com,aes128-gcm@openssh.com,chacha20-poly1305-mt@hpnssh.org,chacha20-poly1305@openssh.com,aes256-ctr` |
+| ChaCha first | `chacha20-poly1305-mt@hpnssh.org,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr` |
+
+### Using the result
+
+- **For every connection from this machine:** add the `Ciphers` line (and the `MACs` line if you use `aes-ctr`) to `/etc/hpnssh/ssh_config`, or to `~/.ssh/config` for one user, for example under `Host *`.
+- **For a server:** add the same lines to `/etc/hpnssh/sshd_config` and restart `hpnsshd`. Both ends need AES-capable CPUs for AES-GCM to pay off; the client chooses from the server's list in its own order.
+- **For one connection:** `hpnssh -c aes256-gcm@openssh.com host`.
+
+`chacha20-poly1305-mt@hpnssh.org` is HPN-SSH's multithreaded ChaCha. A plain OpenSSH peer does not know it and falls through to the next name.
+
+### Limits
+
+- It times **one core**, not a connection. The end-to-end speed also depends on the other end, the network, the MAC and, on a long path, the TCP buffer limit (see [Tuning the TCP stack](#tuning-the-tcp-stack)).
+- It was run on an Apple M1 Max and an Intel Xeon E5-2630 v4, both with AES instructions, where AES-GCM led by 1.7 to 3.7 times per core. The path for a CPU without AES instructions is checked by the tests with stand-in data, not on real hardware.
+- `aes128-gcm` is in the list but has not been timed.
+- Its tests are in `tests/run-tests.sh`: the choice from measured speeds and from CPU features, the `--config` output, bad input, and that `hpnssh` accepts every name it prints.
+
 ## Patches
 
 `sphynx-ssh/` is upstream HPN-SSH plus the changes sphynx has made to it. Those changes are kept as a series of patches in `patches/`, one per change, so they can be reviewed one at a time, sent upstream, and applied again to a newer HPN-SSH release.
@@ -364,6 +435,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0016 | `channels`: arm the input fd only when it can be read. Fixes the client and server spinning at full CPU on long paths. | 0.3.4 | yes |
 | 0017 | `version`: add the sphynx version to the release string. | 0.0.3 | fork only |
 | 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
+| 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
 
 Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
 
@@ -396,7 +468,7 @@ Put the new commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, s
 
 ### Sending a patch upstream
 
-Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork.
+Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in order, because later patches build on earlier ones (0003 and 0005 follow 0001 and 0002, 0010 follows 0004, and the `scp` patches follow each other). The commit messages end with a `Co-Authored-By` trailer for the assistant that helped write them. Remove it if you do not want it. Patches 0017 and 0018 are specific to this fork. Patch 0019 is a performance change that stands on its own.
 
 ### How the series was made
 
@@ -443,6 +515,7 @@ tests/run-tests.sh          test suite, with its C tests in tests/c/ and the scp
 tests/package-lifecycle.sh  install, upgrade, remove and purge of the .deb, for a throwaway systemd machine
 tools/perf/                 performance comparison of OpenSSH and HPN-SSH (see tools/perf/README.md)
 tools/tune-tcp.sh           applies the TCP buffer tuning described in this file
+tools/suggest-cipher.sh     suggests a Ciphers and MACs setting for this CPU
 tools/patches.sh            checks and applies the patch series in patches/
 HANDOFF.md                  current state and next steps, for picking the work up elsewhere
 patches/                    the changes sphynx makes to HPN-SSH, one patch each, applied to the commit in patches/BASE

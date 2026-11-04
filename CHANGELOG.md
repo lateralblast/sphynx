@@ -4,6 +4,28 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-11-04
+
+### Changed
+
+- The README documents `tools/suggest-cipher.sh` in its own section, "Choosing a cipher and MAC", with its options, sample output, how it chooses, how to use the result and its limits. It was a short subsection under Performance.
+
+## [0.4.6] - 2026-11-04
+
+### Added
+
+- `tools/suggest-cipher.sh` reads the CPU, times AES-256-GCM and ChaCha20-Poly1305 with `openssl speed` (or decides from the AES instruction flag with `--no-measure`) and prints the `Ciphers` and `MACs` lines that suit the machine. `--config` prints only those two lines, `--seconds N` sets the timing length. It changes nothing. `tests/run-tests.sh` checks the choice against stand-in CPU and `openssl` output, and that `hpnssh` accepts every name it prints.
+
+## [0.4.5] - 2026-11-04
+
+### Changed
+
+- `aes256-ctr` (and the other multithreaded AES-CTR ciphers) is 4 to 7 percent faster. `aes_mt_do_cipher` in `sphynx-ssh/cipher-ctr-mt-functions.c` XORed the keystream into the data one 16 byte block at a time, with an alignment test and a modulo for each. It now XORs as much as the current keystream queue covers in one pass. Over loopback: macOS arm64 856 to 919 MB/s, Linux x86-64 519 to 541 MB/s. This is patch 0019.
+
+### Added
+
+- `tests/c/aes_ctr_mt_crypt.c` checks the multithreaded AES-CTR cipher against OpenSSL's AES-256-CTR for chunks of assorted sizes across several keystream queue switches. It passes on the old and the new loop.
+
 ## [0.4.4] - 2026-11-04
 
 ### Added
