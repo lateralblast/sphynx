@@ -6,14 +6,21 @@ See [HANDOFF.md](HANDOFF.md) for the current state and suggested order.
 
 ## Open
 
-- [ ] sphynx: extend the performance comparison to scp and sftp transfers, an HPN-SSH client against an OpenSSH server and the reverse, different `SSH_CIPHER_THREADS` values, and packet loss and jitter (`netem loss`, `netem jitter`).
+- [~] sphynx: sweep `SSH_CIPHER_THREADS` and the cipher on a LAN and on long paths, to see whether HPN-SSH's default thread counts are right for 4, 8 and 16 cores (AES-CTR reads the variable per connection, ChaCha has a fixed count). First results (now in the README, 0.4.4), `aes256-ctr` on loopback with 1 to 8 threads: no gain from more threads, 920 MB/s at 1 thread and about 860 at 8 on a 10-core Mac, and 1134 MB/s flat from 1 to 4 threads (about 1100 at 6 and 8) on a 9-core Linux machine, so the default of 1 looks right at these speeds. The next step is to find what limits a single connection at about 1.1 GB/s (the cipher is not it), then try a real 10 Gbit/s link and long paths, and the `SSH_CIPHER_THREADS` cap differs between the two cipher files (`cipher-ctr-mt.c` 4, `cipher-ctr-mt-functions.c` 32). ChaCha has a fixed single thread and no setting.
+- [ ] sphynx: measure packet loss and jitter on long paths, and compare TCP congestion control (`cubic` against `bbr`, `net.ipv4.tcp_congestion_control`) with loss. `tune-tcp.sh` does not touch it today.
+- [ ] sphynx: measure HPN-SSH's no-encryption mode after authentication (`none` cipher, `NoneEnabled`). Only for trusted links, so decide first whether to document it.
+- [ ] sphynx: check network settings beyond TCP buffers (MTU and jumbo frames, NIC offloads, `net.core.netdev_max_backlog`) once the perf harness can run on a 10 Gbit/s link.
+- [ ] sphynx: measure HPN-SSH against OpenSSH on a long path on macOS, with and without `tools/tune-tcp.sh apply`. A `dnctl`/`pfctl` (dummynet) delay did not apply to loopback traffic, so it needs two machines or a real delay.
+- [~] sphynx: extend the performance comparison to scp and sftp transfers, an HPN-SSH client against an OpenSSH server and the reverse, different `SSH_CIPHER_THREADS` values, and packet loss and jitter. `tools/perf` supports all of these as of 0.3.8, but it has never been run on Linux: run it, fix what breaks, check that the server picks up `SSH_CIPHER_THREADS`, and publish the results in the README.
 - [ ] sphynx-ssh: with the default 4 MB send buffer limit the HPN-SSH client still uses about 1 to 2 CPU-seconds per GB more than OpenSSH on long paths (2.6 to 3.3 against 1.1 to 1.9, measured on 0.3.4), though with the limit lifted the two are within 0.4. Not investigated. It may be the larger channel buffers or the window growth.
 - [ ] sphynx-ssh: the full-CPU spin fixed in 0.3.4 (patch 0016) has no automated test. A unit test needs a `Channel`, and `channel_pre_open` is static. An end-to-end check (the client's CPU per GB over a 50 ms path is under a ceiling) needs a running `hpnsshd`, network namespaces and `sudo`, so it would be part of `tools/perf`, not `tests/run-tests.sh`.
-- [ ] Install the built `.deb` on a clean Ubuntu VM or container and test install, upgrade, remove and purge, including the `hpnsshd` service and key generation.
+- [ ] sphynx: the man pages are installed under `/usr/share/man/cat1`, `cat5` and `cat8` (formatted pages), not `man1`, `man5` and `man8`. Check the `configure` man page type, and whether `man hpnssh` finds them.
+- [ ] sphynx: the install test ran only on Ubuntu 26.04 arm64 (in OrbStack). Repeat it on amd64, and on 24.04 if that is to be supported.
 - [ ] Run `lintian` on the built `.deb` and fix what it reports.
 - [ ] Add a Debian target (`--target debian`).
 - [ ] Add an RPM target for Fedora and RHEL.
-- [ ] Decide whether to ship `/etc/default/hpnssh` (the unit already reads it if present).
+- [ ] sphynx: measure whether raising `net.inet.tcp.autosndbufmax`, `autorcvbufmax` and `kern.ipc.maxsockbuf` on macOS actually lifts HPN-SSH throughput on a long path. The `tune-tcp.sh` macOS support only checks that the settings are changed, not what they do. Add a LaunchDaemon for `persist` if they help.
+- [ ] Decide whether to ship `/etc/default/hpnssh` (the unit already reads it if present). Without it, every start logs `Referenced but unset environment variable evaluates to an empty string: SSHD_OPTS`.
 - [ ] Decide how `hpn-ssh/` is kept in step with `openssh-portable/` (rebase, patch series, or leave it to the upstream HPN-SSH repo).
 
 ### sphynx-ssh review (found in `sphynx-ssh/` at `master` 2c7cc5554)
@@ -68,6 +75,12 @@ Not yet reviewed:
 
 ## Done
 
+- [x] sphynx: compared the MACs for `aes256-ctr` on Linux and macOS loopback (0.4.3). The default `umac-64-etm@openssh.com` is the fastest, so nothing to change. Results are in the README. Not measured: AEAD ciphers (no MAC) against `aes256-ctr` with a MAC on a real link.
+- [x] sphynx: `tools/tune-tcp.sh` limits the macOS target to 28 MiB, because macOS rejects a `kern.ipc.maxsockbuf` above 32 MiB (0.4.2). Measured loopback throughput on macOS is in the README; raising the limits made no difference without delay.
+- [x] sphynx: `packaging/ubuntu/postinst` now runs `restart` instead of `try-restart`, so a removed package that is installed again starts `hpnsshd` (0.4.0). `tests/package-lifecycle.sh` passes the reinstall checks.
+- [x] sphynx: the packaged `sshd_config` sets `UsePAM yes`, as Ubuntu's does, so a key login to an account with a locked password works and the shipped PAM service is used (0.3.9).
+- [x] sphynx: installed the built `.deb` on a clean Ubuntu 26.04 arm64 machine with systemd (OrbStack, built on a second machine) and tested install, upgrade (including a disabled service and an edited conffile), remove, reinstall, purge, and purging an installed package. all checks pass: the `hpnsshd` user, the three host keys (kept on upgrade, remove and reinstall, regenerated after a purge), the service and a login on port 2222 all behave, and a purge leaves nothing behind. The reinstall start bug it found is fixed in 0.4.0. Verification only, no version. The test is `tests/package-lifecycle.sh`.
+- [x] sphynx: `tools/tune-tcp.sh` works on macOS (`show` and `apply`; `persist` and `revert` are Linux only), with tests that run on any system (0.3.7).
 - [x] sphynx: the patch series, `patches/` (18 patches on upstream commit `2c7cc5554`), `patches/BASE` and `tools/patches.sh` (`check`, `apply`, `base`), documented in the README under "Patches" (0.3.6).
 - [x] sphynx: `tools/perf/perf.sh run` starts every run from the host's own TCP limits, so a result no longer depends on an earlier run's `--wmem` or `--rmem` (0.3.5).
 - [x] sphynx-ssh: the HPN-SSH client and server spun at full CPU on long paths, in most runs with the default buffer limit (19 to 37 CPU-seconds per GB against under 2 for OpenSSH). `channel_pre_open()` armed the input fd with `sshbuf_check_reserve()`, but `channel_handle_rfd()` reads only when `sshbuf_avail()` is non-zero, and for channel input buffers that keeps 1/21 of the buffer as headroom. In that band `ppoll()` returned at once and the read was skipped. Found with `strace` (polls with no `read`) and `gdb` (`len(input)=15978301`, `avail=0`, `io_want=1`). Fixed with `channel_input_can_read()`, used in both places that arm the read; the client now uses 1.8 to 3.3 CPU-seconds per GB with unchanged throughput (0.3.4). The OpenSSH regression suite passes on the fixed build (all tests passed, 87 checks).

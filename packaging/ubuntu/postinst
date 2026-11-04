@@ -25,7 +25,7 @@ case "$1" in
         fi
         if [ -d /run/systemd/system ]; then
             if [ -n "$2" ]; then
-                deb-systemd-invoke try-restart hpnsshd.service >/dev/null || true
+                deb-systemd-invoke restart hpnsshd.service >/dev/null || true
             else
                 deb-systemd-invoke start hpnsshd.service >/dev/null || true
             fi

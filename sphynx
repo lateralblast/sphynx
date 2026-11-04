@@ -2,7 +2,7 @@
 # sphynx - build HPN-SSH from source and package it for target operating systems.
 set -euo pipefail
 
-SPHYNX_VERSION="0.3.6"
+SPHYNX_VERSION="0.4.4"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -192,6 +192,12 @@ build_ubuntu() {
     log "Adding systemd unit, PAM service and maintainer scripts"
     install -Dm644 "$ROOT_DIR/packaging/ubuntu/hpnsshd.service" "$root/lib/systemd/system/hpnsshd.service"
     install -Dm644 "$ROOT_DIR/packaging/ubuntu/hpnsshd.pam" "$root/etc/pam.d/hpnsshd"
+    # Upstream leaves UsePAM at its default of no, which refuses a key login to an
+    # account with a locked password (the default user on cloud images) and leaves
+    # the PAM service above unused. Ubuntu's own sshd_config sets UsePAM yes.
+    sed -i 's/^#UsePAM no$/UsePAM yes/' "$root/etc/hpnssh/sshd_config"
+    grep -q '^UsePAM yes$' "$root/etc/hpnssh/sshd_config" \
+        || die "could not set UsePAM yes in the packaged sshd_config (is the '#UsePAM no' line still there?)"
     # An example only: it goes under /usr/share/doc so installing the package
     # never changes system-wide TCP settings. The administrator opts in.
     install -Dm644 "$ROOT_DIR/packaging/ubuntu/99-hpn-ssh-tcp.conf" \

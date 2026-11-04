@@ -56,7 +56,7 @@ pass "--jobs must be positive"
 # --- lint -----------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
+    shellcheck sphynx tests/run-tests.sh tests/scp-resume.sh tests/build-c-test.sh tests/package-lifecycle.sh tools/perf/perf.sh tools/perf/build-baseline.sh tools/tune-tcp.sh tools/patches.sh tests/tune-tcp.sh packaging/ubuntu/postinst packaging/ubuntu/prerm packaging/ubuntu/postrm
     pass "shellcheck is clean"
 else
     echo "skip - shellcheck not installed"
@@ -86,11 +86,62 @@ grep -q ' 2.00x' <<<"$perf_out" || fail "perf analysis: LAN ratio should be 2.00
 grep -q ' 2.00x' <<<"$(grep aes256-ctr <<<"$perf_out")" || fail "perf analysis: 50 ms ratio should be 2.00x"
 pass "tools/perf/analyze.py reports medians, ratios and condition headings"
 
+# a CSV with tools, client and server pairs, thread counts, loss and jitter
+cat >"$TEST_DIR/perf-fixture2.csv" <<CSV
+impl,cipher,cond,run,mb,elapsed,user,sys,tool,server,threads
+base,handshake,wan50_loss0.5,1,0,1.0,0,0,scp,base,-
+hpn,handshake,wan50_loss0.5,1,0,1.0,0,0,scp,hpn,-
+hpn,handshake,wan50_loss0.5,1,0,1.0,0,0,scp,base,-
+base,aes256-ctr,wan50_loss0.5,1,100,11.0,0.5,0.5,scp,base,-
+hpn,aes256-ctr,wan50_loss0.5,1,100,6.0,0.5,0.5,scp,hpn,1
+hpn,aes256-ctr,wan50_loss0.5,1,100,3.0,0.5,0.5,scp,hpn,4
+hpn,aes256-ctr,wan50_loss0.5,1,100,nan,nan,nan,scp,base,1
+hpn,aes256-ctr,wan50_loss0.5,1,100,9.0,0.5,0.5,scp,base,4
+base,default,lan_loss1,1,100,2.0,0.5,0.5,sftp,base,-
+CSV
+perf_out2="$(python3 -B tools/perf/analyze.py "$TEST_DIR/perf-fixture2.csv")"
+grep -q '^50 ms round trip, 0.5% loss each way, scp' <<<"$perf_out2" || fail "perf analysis: no loss and tool heading"
+grep -q '^LAN, 1% loss each way, sftp' <<<"$perf_out2" || fail "perf analysis: no LAN loss heading"
+grep -q '^HPN client = ' <<<"$perf_out2" || fail "perf analysis: no legend for mixed pairs"
+grep -q 'aes256-ctr, 4 threads .* 5.00x .* 1.25x' <<<"$perf_out2" \
+    || fail "perf analysis: 4 threads should show 5.00x for HPN-SSH and 1.25x for the HPN client"
+grep -q 'aes256-ctr, 1 thread .* 2.00x .* - ' <<<"$perf_out2" || fail "perf analysis: a failed run should show as -"
+pass "tools/perf/analyze.py reads tools, client and server pairs, thread counts, loss and jitter"
+
+# perf.sh run --dry-run needs no sudo: it prints the cases and the netem settings
+dry() { bash tools/perf/perf.sh run --dry-run "$@" 2>&1; }
+out="$(dry --conds lan,wan50,wan50_loss0.5,wan100_loss0.1_jit5,lan_loss1)"
+grep -q '^cond lan: netem $' <<<"$out" || fail "perf dry run: lan should have no netem settings"
+grep -q '^cond wan50: netem delay 25ms rate 1gbit limit 100000$' <<<"$out" || fail "perf dry run: wan50 netem changed"
+grep -q '^cond wan50_loss0.5: netem delay 25ms loss 0.5% rate 1gbit limit 100000$' <<<"$out" || fail "perf dry run: loss netem"
+grep -q '^cond wan100_loss0.1_jit5: netem delay 50ms 5ms loss 0.1% rate 1gbit limit 100000$' <<<"$out" || fail "perf dry run: jitter netem"
+grep -q '^cond lan_loss1: netem loss 1%$' <<<"$out" || fail "perf dry run: lan loss netem"
+grep -q 'cond=wan100_loss0.1_jit5 mb=384 ' <<<"$out" || fail "perf dry run: a loss condition should use the size of its wanNN"
+out="$(dry --conds wan50 --tools ssh,scp,sftp --pairs base:base,hpn:hpn,hpn:base,base:hpn --ciphers default --runs 1)"
+[ "$(grep -c '^case ' <<<"$out")" = 24 ] || fail "perf dry run: 3 tools x 4 pairs x (connect + 1 cipher) should be 24 cases"
+grep -q 'tool=sftp client=base server=hpn cipher=default ' <<<"$out" || fail "perf dry run: a mixed pair is missing"
+out="$(dry --conds lan --pairs base:base,hpn:hpn --ciphers default,aes256-ctr --threads default,2,4 --runs 1)"
+[ "$(grep -c 'cipher=aes256-ctr .*server=hpn\|server=hpn cipher=aes256-ctr' <<<"$out")" = 3 ] \
+    || fail "perf dry run: aes256-ctr on HPN-SSH should run once per thread count"
+[ "$(grep -c 'client=base server=base cipher=aes256-ctr' <<<"$out")" = 1 ] \
+    || fail "perf dry run: OpenSSH should run once, whatever the thread count"
+[ "$(grep -c 'cipher=default cond=lan' <<<"$out")" = 2 ] || fail "perf dry run: a cipher that ignores threads should run once"
+grep -q '^hpn server SSH_CIPHER_THREADS=4$' <<<"$out" || fail "perf dry run: the server should restart for each thread count"
+for bad in "--conds lan_jit5" "--conds wan50_loss" "--tools ftp" "--pairs hpn:ssh" "--threads 0" "--runs 0"; do
+    # shellcheck disable=SC2086 # the options are meant to split
+    if dry $bad >/dev/null; then fail "perf dry run accepted: $bad"; fi
+done
+pass "perf.sh run --dry-run plans the cases, netem settings and thread counts, and rejects bad input"
+
 # --- tools/tune-tcp.sh -------------------------------------------------------
 
 mkdir -p "$TEST_DIR"
 if tests/tune-tcp.sh >"$TEST_DIR/tune-tcp.out" 2>&1; then
-    pass "tools/tune-tcp.sh tests pass ($(grep -c '^ok' "$TEST_DIR/tune-tcp.out") checks)"
+    if grep -q '^ok' "$TEST_DIR/tune-tcp.out"; then
+        pass "tools/tune-tcp.sh tests pass ($(grep -c '^ok' "$TEST_DIR/tune-tcp.out") checks)"
+    else
+        pass "tools/tune-tcp.sh tests skipped: $(sed -n 's/^skip - //p' "$TEST_DIR/tune-tcp.out" | head -1)"
+    fi
 else
     cat "$TEST_DIR/tune-tcp.out" >&2
     fail "tools/tune-tcp.sh tests"
@@ -146,6 +197,12 @@ for path in ./usr/bin/hpnssh ./usr/sbin/hpnsshd ./usr/lib/hpnssh/hpnsftp-server 
     grep -q " $path\$" <<<"$contents" || fail "package is missing $path"
 done
 pass "package contains the binaries, config, PAM service and systemd unit"
+
+# the packaged sshd_config must turn PAM on, so that the shipped PAM service is used
+# and a key login to an account with a locked password works
+conf="$(dpkg-deb --fsys-tarfile "$deb" | tar -xOf - ./etc/hpnssh/sshd_config)"
+grep -q '^UsePAM yes$' <<<"$conf" || fail "the packaged sshd_config does not set UsePAM yes"
+pass "the packaged sshd_config sets UsePAM yes"
 
 extract="$TEST_DIR/extract"
 dpkg-deb -x "$deb" "$extract"

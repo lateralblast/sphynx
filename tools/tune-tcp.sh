@@ -7,6 +7,9 @@
 #   tools/tune-tcp.sh revert    put back what persist replaced
 #
 # It only ever raises a maximum, never lowers one, and changes nothing else.
+# It works on Linux (net.ipv4.tcp_wmem and tcp_rmem) and on macOS
+# (net.inet.tcp.autosndbufmax, autorcvbufmax and kern.ipc.maxsockbuf). On macOS
+# there is no persist or revert: a setting lasts until the next reboot.
 # See "Tuning the TCP stack" in the README.
 set -euo pipefail
 
@@ -24,14 +27,15 @@ usage: tools/tune-tcp.sh <command> [options]
 commands:
   show      show the current values and what apply would change
   apply     set the new maximums now; lasts until the next reboot
-  persist   apply, and write $CONF_DIR/$CONF_NAME so they survive a reboot
-  revert    restore the values persist replaced, and remove that file
+  persist   apply, and write $CONF_DIR/$CONF_NAME so they survive a reboot (Linux only)
+  revert    restore the values persist replaced, and remove that file (Linux only)
 
 options:
   --bandwidth RATE   link speed, for example 1gbit or 100mbit (units: kbit, mbit, gbit, tbit)
   --rtt TIME         round-trip time, for example 100ms or 0.1s
   --max BYTES        set the maximum directly; overrides --bandwidth and --rtt
-  --send-only        change only net.ipv4.tcp_wmem, not tcp_rmem
+  --send-only        change only the send maximum (net.ipv4.tcp_wmem, or
+                     net.inet.tcp.autosndbufmax on macOS), not the receive one
   --yes              do not ask for confirmation
   --conf-dir DIR     where persist writes its file (default $CONF_DIR)
 
@@ -45,19 +49,28 @@ as_root() {
     if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
 }
 
-[ -r /proc/sys/net/ipv4/tcp_wmem ] || die "this needs Linux (no /proc/sys/net/ipv4/tcp_wmem)"
+# TUNE_TCP_OS overrides the detected system. The tests use it to run the macOS
+# code on any machine with a stand-in for sysctl.
+OS="${TUNE_TCP_OS:-$(uname -s)}"
+case "$OS" in
+    Linux) [ -r /proc/sys/net/ipv4/tcp_wmem ] || die "no /proc/sys/net/ipv4/tcp_wmem" ;;
+    Darwin) ;;
+    *) die "this needs Linux or macOS, not $OS" ;;
+esac
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # ---------------------------------------------------------------- parsing
 
 rate_to_bps() {
-    local v="${1,,}"
+    local v; v="$(lower "$1")"
     [[ "$v" =~ ^([0-9]+(\.[0-9]+)?)(bit|kbit|mbit|gbit|tbit)?$ ]] || die "cannot read bandwidth '$1' (try 1gbit or 100mbit)"
     awk -v n="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]:-bit}" \
         'BEGIN{m["bit"]=1;m["kbit"]=1e3;m["mbit"]=1e6;m["gbit"]=1e9;m["tbit"]=1e12; printf "%.0f", n*m[u]}'
 }
 
 time_to_seconds() {
-    local v="${1,,}"
+    local v; v="$(lower "$1")"
     [[ "$v" =~ ^([0-9]+(\.[0-9]+)?)(us|ms|s)?$ ]] || die "cannot read round-trip time '$1' (try 100ms or 0.1s)"
     awk -v n="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]:-ms}" \
         'BEGIN{m["us"]=1e-6;m["ms"]=1e-3;m["s"]=1; printf "%.9f", n*m[u]}'
@@ -65,6 +78,7 @@ time_to_seconds() {
 
 # ---------------------------------------------------------------- state
 
+DARWIN_MAX_TARGET=$((28 * MIB))
 BANDWIDTH="" RTT="" MAX="" SEND_ONLY=0 ASSUME_YES=0
 TARGET="" TARGET_NOTE=""
 
@@ -85,32 +99,68 @@ compute_target() {
     else
         TARGET="$DEFAULT_MAX"; TARGET_NOTE="the default"
     fi
+    # macOS refuses a kern.ipc.maxsockbuf above 32 MiB ("Result too large"), and
+    # that cap has to hold the target plus 1/8 of overhead, so the target stops
+    # at 28 MiB.
+    if [ "$OS" = Darwin ] && [ "$TARGET" -gt "$DARWIN_MAX_TARGET" ]; then
+        TARGET_NOTE="$TARGET_NOTE; limited to $((DARWIN_MAX_TARGET / MIB)) MiB, the most macOS accepts"
+        TARGET="$DARWIN_MAX_TARGET"
+    fi
 }
 
-# plan: for each key, "key min def curmax newmax"
+# plan: one line per setting, "key|prefix|current|new". On Linux a setting is
+# three numbers (minimum, default, maximum) and the prefix is the first two. On
+# macOS it is one number and the prefix is empty. Only the last number changes.
 PLAN=()
 CHANGES=0
+
+# plan_add KEY PREFIX CURRENT NEW
+plan_add() {
+    PLAN+=("$1|$2|$3|$4")
+    [ "$4" = "$3" ] || CHANGES=$((CHANGES + 1))
+}
+
+# raised_max CURRENT: the new maximum, never lower than the current one
+raised_max() { if [ "$TARGET" -gt "$1" ]; then echo "$TARGET"; else echo "$1"; fi; }
+
 build_plan() {
-    local key min def max new
+    local key min def max
     PLAN=(); CHANGES=0
+    if [ "$OS" = Darwin ]; then
+        # The socket buffer cap has to hold the largest buffer, with the overhead
+        # the kernel counts against it (a 2304 byte buffer per 2048 of payload).
+        local need
+        max="$(sysctl -n kern.ipc.maxsockbuf)"
+        need=$(((TARGET * 9 + 7) / 8))
+        [ "$need" -gt "$max" ] || need="$max"
+        plan_add kern.ipc.maxsockbuf "" "$max" "$need"
+        max="$(sysctl -n net.inet.tcp.autosndbufmax)"
+        plan_add net.inet.tcp.autosndbufmax "" "$max" "$(raised_max "$max")"
+        if [ "$SEND_ONLY" != 1 ]; then
+            max="$(sysctl -n net.inet.tcp.autorcvbufmax)"
+            plan_add net.inet.tcp.autorcvbufmax "" "$max" "$(raised_max "$max")"
+        fi
+        return 0
+    fi
     for key in net.ipv4.tcp_wmem net.ipv4.tcp_rmem; do
         [ "$key" = net.ipv4.tcp_rmem ] && [ "$SEND_ONLY" = 1 ] && continue
         read -r min def max < <(sysctl -n "$key")
-        new="$max"
-        if [ "$TARGET" -gt "$max" ]; then new="$TARGET"; CHANGES=$((CHANGES + 1)); fi
-        PLAN+=("$key $min $def $max $new")
+        plan_add "$key" "$min $def" "$max" "$(raised_max "$max")"
     done
 }
 
+# setting_value PREFIX NUMBER: the string sysctl shows and accepts
+setting_value() { echo "${1:+$1 }$2"; }
+
 print_plan() {
-    local line key min def max new
+    local line key pre cur new
     echo "target maximum: $TARGET bytes ($((TARGET / MIB)) MiB), $TARGET_NOTE"
     for line in "${PLAN[@]}"; do
-        read -r key min def max new <<<"$line"
-        if [ "$new" != "$max" ]; then
-            printf '  %-18s %s %s %s  ->  %s %s %s\n' "$key" "$min" "$def" "$max" "$min" "$def" "$new"
+        IFS='|' read -r key pre cur new <<<"$line"
+        if [ "$new" != "$cur" ]; then
+            printf '  %-28s %s  ->  %s\n' "$key" "$(setting_value "$pre" "$cur")" "$(setting_value "$pre" "$new")"
         else
-            printf '  %-18s %s %s %s  (already at least that large, left alone)\n' "$key" "$min" "$def" "$max"
+            printf '  %-28s %s  (already at least that large, left alone)\n' "$key" "$(setting_value "$pre" "$cur")"
         fi
     done
 }
@@ -124,11 +174,11 @@ confirm() {
 }
 
 apply_plan() {
-    local line key min def max new
+    local line key pre cur new
     for line in "${PLAN[@]}"; do
-        read -r key min def max new <<<"$line"
-        [ "$new" != "$max" ] || continue
-        as_root sysctl -w "$key=$min $def $new" >/dev/null
+        IFS='|' read -r key pre cur new <<<"$line"
+        [ "$new" != "$cur" ] || continue
+        as_root sysctl -w "$key=$(setting_value "$pre" "$new")" >/dev/null
     done
 }
 
@@ -153,23 +203,29 @@ cmd_apply() {
     confirm
     apply_plan
     echo "applied; this lasts until the next reboot."
-    local line key min def max new
+    local line key pre cur new
     echo "to put the old values back now:"
     for line in "${PLAN[@]}"; do
-        read -r key min def max new <<<"$line"
-        [ "$new" != "$max" ] && echo "  sudo sysctl -w $key=\"$min $def $max\""
+        IFS='|' read -r key pre cur new <<<"$line"
+        [ "$new" != "$cur" ] && echo "  sudo sysctl -w $key=\"$(setting_value "$pre" "$cur")\""
     done
     return 0
 }
 
+# macOS reads no sysctl.d, so there is no file to write or to undo
+linux_only() {
+    [ "$OS" = Linux ] || die "$1 works on Linux only. On macOS a setting from 'apply' lasts until the next reboot; to set it at every boot, run 'tune-tcp.sh apply --yes' from a LaunchDaemon."
+}
+
 cmd_persist() {
+    linux_only persist
     compute_target; build_plan; print_plan
     local file; file="$(conf_file)"
     [ "$CHANGES" -gt 0 ] || [ -f "$file" ] || { echo "nothing to change"; return 0; }
     confirm
     # keep the values from before the first persist, so revert goes back to them
     local -A prev=()
-    local line key min def max new
+    local line key min def max new pre cur
     if [ -f "$file" ]; then
         while read -r key min def max; do
             prev["$key"]="$min $def $max"
@@ -181,14 +237,14 @@ cmd_persist() {
         echo "# Larger TCP buffer maximums for HPN-SSH on long, fast paths."
         echo "# Undo with: tools/tune-tcp.sh revert"
         for line in "${PLAN[@]}"; do
-            read -r key min def max new <<<"$line"
-            echo "$key = $min $def $new"
+            IFS='|' read -r key pre cur new <<<"$line"
+            echo "$key = $pre $new"
         done
         echo "#"
         echo "# Values before this file, used by 'tune-tcp.sh revert':"
         for line in "${PLAN[@]}"; do
-            read -r key min def max new <<<"$line"
-            echo "# previous $key = ${prev[$key]:-$min $def $max}"
+            IFS='|' read -r key pre cur new <<<"$line"
+            echo "# previous $key = ${prev[$key]:-$pre $cur}"
         done
     } >"$tmp"
     as_root mkdir -p "$CONF_DIR"
@@ -199,6 +255,7 @@ cmd_persist() {
 }
 
 cmd_revert() {
+    linux_only revert
     local file; file="$(conf_file)"
     [ -f "$file" ] || die "$file does not exist, so there is nothing to revert. For a setting made with 'apply', use the sysctl -w commands it printed, or reboot."
     local key min def max restored=0

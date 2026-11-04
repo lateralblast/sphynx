@@ -4,6 +4,66 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-04
+
+### Added
+
+- The README has a "Cipher threads" section: throughput of `aes256-ctr` with 1 to 8 `SSH_CIPHER_THREADS` on Linux and macOS. More threads did not help, so the default of 1 stays.
+
+## [0.4.3] - 2026-11-04
+
+### Added
+
+- The README has a "Choice of MAC" section: throughput of `aes256-ctr` with each MAC, on Linux and macOS. The default (`umac-64-etm@openssh.com`) is already the fastest, and `hmac-sha2-512` costs about 40 percent.
+
+## [0.4.2] - 2026-11-04
+
+### Fixed
+
+- `tools/tune-tcp.sh apply` works on macOS for a target above 28 MiB, which includes its 32 MiB default and `--bandwidth 1gbit --rtt 100ms`. macOS refuses a `kern.ipc.maxsockbuf` above 32 MiB (`Result too large`), so the script stopped and changed nothing. The target is now limited to 28 MiB on macOS and the plan says so.
+
+### Added
+
+- The README has a "Performance on macOS" section with loopback results for HPN-SSH against OpenSSH, with and without raised TCP limits, and says what was not measured. `tests/tune-tcp.sh` checks the 28 MiB limit.
+
+## [0.4.1] - 2026-11-04
+
+### Changed
+
+- The README's Performance section now says all its results were measured on Linux (Ubuntu 26.04), none on macOS.
+
+## [0.4.0] - 2026-11-04
+
+### Fixed
+
+- Installing the package again after `apt remove` (not purge) now starts `hpnsshd`. `packaging/ubuntu/postinst` ran `try-restart` whenever dpkg passed an old version, which does nothing to a stopped service, so the service was left enabled but inactive. It now runs `restart`; a service the administrator disabled stays disabled.
+
+## [0.3.9] - 2026-11-03
+
+### Fixed
+
+- The packaged `/etc/hpnssh/sshd_config` now sets `UsePAM yes`, as Ubuntu's `sshd_config` does. It was left at the upstream default of `no`, so `hpnsshd` refused a key login to an account with a locked password (`User ... not allowed because account is locked`), which is the default user on cloud images, and the shipped `/etc/pam.d/hpnsshd` was never used. `sphynx build` sets it while packaging and stops if it cannot; `sphynx-ssh` is unchanged.
+
+## [0.3.8] - 2026-11-03
+
+### Added
+
+- `tools/perf/perf.sh run` can time `scp` and `sftp` (`--tools`), every pairing of OpenSSH and HPN-SSH client and server (`--pairs`, for example `hpn:base`), several `SSH_CIPHER_THREADS` values (`--threads`, restarting `hpnsshd` for each), and packet loss and jitter (`wan50_loss0.5`, `wan100_loss0.1_jit5`). `--dry-run` prints the cases and `netem` settings without `sudo`.
+- The results CSV has the columns `tool`, `server` and `threads`, and `tools/perf/analyze.py` prints each tool and condition with a column for every pairing and a row for every thread count. It still reads the older files.
+- Both test servers now configure the SFTP subsystem.
+- None of this has been run on Linux yet; it is checked only by `--dry-run` and `analyze` tests in `tests/run-tests.sh`.
+
+## [0.3.7] - 2026-11-03
+
+### Added
+
+- `tools/tune-tcp.sh` now works on macOS. `show` and `apply` size and raise `net.inet.tcp.autosndbufmax` and `net.inet.tcp.autorcvbufmax`, and raise `kern.ipc.maxsockbuf` far enough to hold them (the kernel counts about 1/8 of overhead against it). `--send-only` leaves the receive maximum alone. `persist` and `revert` are refused on macOS with an explanation, since macOS has no `sysctl.d`: a setting from `apply` lasts until the next reboot.
+- `tests/tune-tcp.sh` runs the macOS code on any system against a stand-in for `sysctl` (`TUNE_TCP_OS=Darwin`), and runs the size and input checks on macOS too. Before, the whole file failed on macOS.
+
+### Fixed
+
+- `tools/tune-tcp.sh` no longer needs bash 4. It failed with "bad substitution" under the bash 3.2 that macOS ships.
+
 ## [0.3.6] - 2026-11-03
 
 ### Added

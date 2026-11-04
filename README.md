@@ -1,6 +1,6 @@
 # sphynx
 
-Version: 0.3.6
+Version: 0.4.4
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -90,7 +90,7 @@ The package installs alongside OpenSSH:
 
 ## Performance
 
-HPN-SSH is faster than OpenSSH on a fast local network, and on long paths it can be several times faster once the kernel's TCP buffer limit allows it. Both results below come from one test setup, described after the tables.
+HPN-SSH is faster than OpenSSH on a fast local network, and on long paths it can be several times faster once the kernel's TCP buffer limit allows it. Both results below were measured on Linux (Ubuntu 26.04), in one test setup described after the tables. None of the numbers in this section come from macOS.
 
 ### Default kernel settings
 
@@ -143,7 +143,7 @@ OpenSSH does not improve, because its window is the limit. HPN-SSH reaches 78 to
 - **Software:** OpenSSH 10.6, built from the same upstream release HPN-SSH is based on, against HPN-SSH 0.3.4. Both were built from source with OpenSSL 3.5.
 - **Network:** two Linux network namespaces joined by a virtual link on a 16-core machine. The delay and a 1 Gbit/s rate limit were added with `tc netem`, half of the round trip in each direction. The LAN case has no shaping. The test hosts were otherwise idle.
 - **Transfer:** one connection, one direction, 384 to 2048 MB of data from `/dev/zero` (768 MB for the larger-limit runs), sent with `dd if=/dev/zero | ssh host 'cat > /dev/null'`. No compression. The time to connect is measured separately and subtracted. The two implementations were run in turn, and the median of 3 runs is reported. The spread between runs was under 2 percent for the long paths.
-- **Not covered:** packet loss and jitter, scp and sftp, mixed pairs (an HPN-SSH client with an OpenSSH server or the reverse), and different numbers of cipher threads. These results show the effect of the buffer limit on an otherwise clean path, not what any real network will give you.
+- **Not covered:** packet loss and jitter, scp and sftp, mixed pairs (an HPN-SSH client with an OpenSSH server or the reverse), and different numbers of cipher threads. `tools/perf` can measure all of these (see its README), but no results are published here yet. These results show the effect of the buffer limit on an otherwise clean path, not what any real network will give you.
 
 To try it yourself, build the two network namespaces, then run a transfer from one to the other:
 
@@ -160,6 +160,62 @@ sudo ip netns exec cli tc qdisc add dev vc root netem delay 25ms rate 1gbit limi
 ```
 
 Run the server inside `srv` (`sudo ip netns exec srv /path/to/sshd ...`) and time the transfer from inside `cli`. Remove everything with `sudo ip netns del srv; sudo ip netns del cli`. Kernel settings such as `tcp_wmem` are per namespace, so you can change them inside the namespaces without touching the host. The tool that automates all of this is in `tools/perf/`; see [tools/perf/README.md](tools/perf/README.md).
+
+### Cipher threads
+
+`SSH_CIPHER_THREADS` sets how many threads HPN-SSH uses to generate the `aes256-ctr` keystream for one connection. It is read when the connection starts, so set it in the environment of the client and restart the server with it set too. The default is 1 thread in each direction. `chacha20-poly1305` always uses one thread and has no setting. HPN-SSH to HPN-SSH over loopback, `aes256-ctr` with its default MAC, median of 5 runs (1024 MB on the Mac, 2048 MB on Linux):
+
+| Threads | Linux, 9 cores | macOS, 10 cores |
+|---|---|---|
+| 1 (default) | 1134 MB/s | 920 MB/s |
+| 2 | 1112 MB/s | 905 MB/s |
+| 3 | 1132 MB/s | 895 MB/s |
+| 4 | 1138 MB/s | 892 MB/s |
+| 6 | 1111 MB/s | 848 MB/s |
+| 8 | 1096 MB/s | 863 MB/s |
+
+- More threads do not help. Throughput is flat from 1 to 4 threads on Linux and falls a little on the Mac, so the default of 1 is the right setting at these speeds. The cipher is not what limits a single connection at about 1 GB/s.
+- Loopback only, with the client and server on the same CPUs. A real 10 Gbit/s link or a long path has not been tried, so this does not rule out a gain there.
+- The two AES-CTR implementations cap the setting differently (4 threads in `cipher-ctr-mt.c`, 32 in `cipher-ctr-mt-functions.c`, which is the one the OpenSSL 3 build uses). Values above the cap are lowered to it.
+
+### Choice of MAC
+
+With `aes256-ctr` the connection also needs a MAC (the AEAD ciphers `aes256-gcm` and `chacha20-poly1305` do not). The MAC runs in the main thread, so it can cap a connection that the cipher threads would not. HPN-SSH to HPN-SSH over loopback, one cipher thread, median of 5 runs of 1024 MB (Mac) or 2048 MB (Linux). Linux is an Ubuntu 26.04 arm64 virtual machine with 9 cores, the Mac is a 10-core MacBook Pro.
+
+| MAC | Linux | macOS |
+|---|---|---|
+| `umac-64-etm@openssh.com` (the default) | 1073 MB/s | 782 MB/s |
+| `umac-64@openssh.com` | 1082 MB/s | 831 MB/s |
+| `umac-128-etm@openssh.com` | 1017 MB/s | 808 MB/s |
+| `umac-128@openssh.com` | 979 MB/s | 818 MB/s |
+| `hmac-sha2-256` | 819 MB/s | 666 MB/s |
+| `hmac-sha2-256-etm@openssh.com` | 770 MB/s | 641 MB/s |
+| `hmac-sha1` | 758 MB/s | 662 MB/s |
+| `hmac-sha1-etm@openssh.com` | 772 MB/s | 646 MB/s |
+| `hmac-sha2-512` | 600 MB/s | 542 MB/s |
+| `hmac-sha2-512-etm@openssh.com` | 659 MB/s | 524 MB/s |
+
+- The default is already the fastest choice. The `umac` MACs are 25 to 40 percent faster than the `hmac-sha2` ones with `aes256-ctr`, and `hmac-sha2-512` is the slowest. The `-etm` and plain forms of one MAC are within the spread between runs of each other.
+- The `-etm` forms are the safer design (they check the MAC before decrypting), and cost nothing measurable, so there is no reason to prefer the plain ones.
+- If you must use `hmac-sha2-256` for policy, expect about a quarter less throughput than the default on a fast link. On a link below a few hundred MB/s none of this matters.
+- Loopback only: the client and server share CPUs, and a long path is limited by the buffers, not the MAC.
+
+### Performance on macOS
+
+Measured on a 10-core MacBook Pro (macOS 27) with both ends on the loopback interface, so the client and server share the same CPUs and there is no delay. OpenSSH is Homebrew's 10.6 (built with OpenSSL 4.1). HPN-SSH is this repository's 0.4.0, built from source against OpenSSL 3.5. Both servers ran unprivileged, with no PAM. Each figure is the median of 3 runs of 1024 MB, sent with `dd if=/dev/zero | ssh host 'cat > /dev/null'`.
+
+| TCP limits | Cipher | OpenSSH 10.6 | HPN-SSH | Ratio |
+|---|---|---|---|---|
+| default (4 MB) | chacha20-poly1305 | 477 MB/s | 624 MB/s | 1.31x |
+| default (4 MB) | aes256-ctr | 767 MB/s | 926 MB/s | 1.21x |
+| default (4 MB) | aes256-gcm | 862 MB/s | 977 MB/s | 1.13x |
+| `tune-tcp.sh apply --max 28311552` | chacha20-poly1305 | 508 MB/s | 672 MB/s | 1.32x |
+| `tune-tcp.sh apply --max 28311552` | aes256-ctr | 758 MB/s | 900 MB/s | 1.19x |
+| `tune-tcp.sh apply --max 28311552` | aes256-gcm | 862 MB/s | 975 MB/s | 1.13x |
+
+- HPN-SSH is ahead by 13 to 32 percent, in the same order as the Linux LAN results above (gcm closest, chacha furthest).
+- Raising the TCP limits changes nothing here. The differences between the two settings are within the spread between runs (HPN-SSH with chacha ranged from 428 to 637 MB/s in one set). With no delay the socket buffers never fill, so the limit is CPU and cipher speed.
+- **Not measured:** a long path on macOS. The tuning only matters there. macOS has no network namespaces, and the `dnctl` and `pfctl` delay (dummynet) did not delay loopback traffic in any rule form tried (a 50 ms setting left a connection taking the same 70 ms), so the effect needs two machines with a real or emulated delay between them. The OpenSSH and HPN-SSH builds also use different OpenSSL versions, so the gap includes some of that difference.
 
 ## Tuning the TCP stack
 
@@ -239,31 +295,33 @@ In the `skmem:(...)` line, `tb` is the send buffer size and `rb` is the receive 
 tools/tune-tcp.sh show                                          # what would change; needs no privileges
 tools/tune-tcp.sh show --bandwidth 1gbit --rtt 100ms            # size the maximum for your path
 tools/tune-tcp.sh apply --bandwidth 1gbit --rtt 100ms           # set it now, until the next reboot
-tools/tune-tcp.sh persist --bandwidth 1gbit --rtt 100ms         # set it now and keep it across reboots
-tools/tune-tcp.sh revert                                        # undo persist
+tools/tune-tcp.sh persist --bandwidth 1gbit --rtt 100ms         # set it now and keep it across reboots (Linux)
+tools/tune-tcp.sh revert                                        # undo persist (Linux)
 ```
 
 | Command | What it does |
 |---|---|
 | `show` | Prints the current values and what `apply` would change. Needs no privileges. |
 | `apply` | Sets the new maximums with `sysctl -w`. They last until the next reboot. It prints the commands that put the old values back. |
-| `persist` | Does what `apply` does, and also writes `/etc/sysctl.d/99-hpn-ssh-tcp.conf`, which keeps the setting across reboots. The old values are recorded in that file. |
-| `revert` | Puts back the values recorded by `persist` and removes the file. |
+| `persist` | Linux only. Does what `apply` does, and also writes `/etc/sysctl.d/99-hpn-ssh-tcp.conf`, which keeps the setting across reboots. The old values are recorded in that file. |
+| `revert` | Linux only. Puts back the values recorded by `persist` and removes the file. |
 
 | Option | Meaning |
 |---|---|
 | `--bandwidth RATE` | Link speed, for example `1gbit` or `100mbit`. The units are `kbit`, `mbit`, `gbit` and `tbit`. |
 | `--rtt TIME` | Round-trip time, for example `100ms` or `0.1s`. Give both this and `--bandwidth`, or neither. |
 | `--max BYTES` | Set the maximum directly. This overrides `--bandwidth` and `--rtt`. |
-| `--send-only` | Change only `net.ipv4.tcp_wmem`, not `net.ipv4.tcp_rmem`. |
+| `--send-only` | Change only the send maximum (`net.ipv4.tcp_wmem`, or `net.inet.tcp.autosndbufmax` on macOS), not the receive one. |
 | `--yes` | Do not ask for confirmation. Without a terminal, `apply` and `persist` refuse to run unless you pass this. |
 | `--conf-dir DIR` | Where `persist` writes its file. The default is `/etc/sysctl.d`. |
 
 With `--bandwidth` and `--rtt`, the maximum is 2.5 times the bandwidth-delay product, rounded up to a whole MiB, at least 4 MiB and at most 256 MiB. For 1 Gbit/s at 100 ms that is 30 MiB. Without them the maximum is 32 MiB, the same as the example file. If the current maximum is already at least that large, it is left alone and the script says so.
 
-`persist` writes the same file name as the example in `/usr/share/doc/hpn-ssh/examples/`, so the two do not stack up. Running `persist` again with a different size keeps the values from before the first run, so `revert` always goes back to the original. This is a system-wide setting: run the script on both ends of the connection if you want both ends changed. It works on Linux only.
+`persist` writes the same file name as the example in `/usr/share/doc/hpn-ssh/examples/`, so the two do not stack up. Running `persist` again with a different size keeps the values from before the first run, so `revert` always goes back to the original. This is a system-wide setting: run the script on both ends of the connection if you want both ends changed.
 
-The script has tests in `tests/tune-tcp.sh`. The checks that change settings run inside a throwaway network namespace, whose TCP settings are separate from the host's, so testing never touches your machine's own settings.
+**macOS.** The script works on Linux and macOS. macOS has no `net.ipv4.tcp_wmem`. Its limits are `net.inet.tcp.autosndbufmax` and `net.inet.tcp.autorcvbufmax` (4 MB by default, the send and receive maximums an auto-tuned connection can grow to) and `kern.ipc.maxsockbuf` (8 MB by default, the cap on any socket buffer). The script raises the first two to the target, and raises `kern.ipc.maxsockbuf` to 9/8 of the target, because the kernel counts overhead against the cap, so a cap equal to the target would hold less than the target. macOS refuses a `kern.ipc.maxsockbuf` above 32 MiB (`Result too large`), so on macOS the target is limited to 28 MiB, and the script says so when it lowers a larger one. That covers the 32 MiB default and a 1 Gbit/s path up to about 90 ms. As on Linux it only raises values. macOS has no `sysctl.d`, so `persist` and `revert` are refused: a setting from `apply` lasts until the next reboot, and to set it at every boot you need to run `tools/tune-tcp.sh apply --yes` from a LaunchDaemon. The effect of the macOS settings on a long path is not measured, see [Performance on macOS](#performance-on-macos).
+
+The script has tests in `tests/tune-tcp.sh`. The macOS checks run on any system, against a stand-in for `sysctl` that keeps its values in files. The checks of the Linux settings run inside a throwaway network namespace, whose TCP settings are separate from the host's, so testing never touches your machine's own settings.
 
 ### Things to know
 
@@ -363,7 +421,7 @@ The build needs these packages. `sphynx build` checks for them first and prints 
 - **Service:** the postinst script enables and starts `hpnsshd` on a fresh install, and restarts it on upgrade if it is running. The prerm stops it on removal. Purge removes the host keys and the `hpnsshd` user.
 - **TCP buffer example:** `/usr/share/doc/hpn-ssh/examples/99-hpn-ssh-tcp.conf` is installed but not enabled. See [Tuning the TCP stack](#tuning-the-tcp-stack).
 - **Conffiles:** `/etc/hpnssh/ssh_config`, `/etc/hpnssh/sshd_config`, `/etc/hpnssh/moduli` and `/etc/pam.d/hpnsshd`.
-- **PAM:** the server uses the `hpnsshd` PAM service, which ships as `/etc/pam.d/hpnsshd`. It is adapted from Ubuntu's `sshd` configuration.
+- **PAM:** the server uses the `hpnsshd` PAM service, which ships as `/etc/pam.d/hpnsshd`. It is adapted from Ubuntu's `sshd` configuration. The packaged `sshd_config` sets `UsePAM yes`, as Ubuntu's does, so an account with a locked password (the default user on cloud images) can log in with a key.
 
 ## Tests
 
@@ -374,12 +432,15 @@ SPHYNX_SKIP_BUILD=1 tests/run-tests.sh   # skip the end-to-end build
 
 The tests check that the version matches in `sphynx`, `README.md` and `CHANGELOG.md`, check the command line, run shellcheck, and build a package and inspect its metadata and contents. They also run the C tests in `tests/c/`, the `scp -Z` tests, a check of the performance analysis script, and the TCP tuning script's tests. The tuning script's tests that change settings need passwordless `sudo` and run only inside a throwaway network namespace; without `sudo` they are skipped.
 
+`tests/package-lifecycle.sh` is not part of that suite. It installs, upgrades, removes, reinstalls and purges the built `.deb` on a machine, and checks the `hpnsshd` user, the host keys, the service and a login on port 2222. It changes the machine it runs on, so run it only in a throwaway VM or container that runs systemd. Its header has the commands for OrbStack.
+
 ## Layout
 
 ```
 sphynx                      wrapper script
 packaging/ubuntu/           control template, maintainer scripts, systemd unit, PAM file, conffiles
 tests/run-tests.sh          test suite, with its C tests in tests/c/ and the scp -Z tests in tests/scp-resume.sh
+tests/package-lifecycle.sh  install, upgrade, remove and purge of the .deb, for a throwaway systemd machine
 tools/perf/                 performance comparison of OpenSSH and HPN-SSH (see tools/perf/README.md)
 tools/tune-tcp.sh           applies the TCP buffer tuning described in this file
 tools/patches.sh            checks and applies the patch series in patches/
