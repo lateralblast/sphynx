@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 0.5.9
+Version: 0.6.1
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -105,6 +105,7 @@ HPN-SSH is faster than OpenSSH on a fast local network, and on long paths it can
 |---|---|---|
 | Is HPN-SSH faster than OpenSSH on a fast LAN? | Yes, 1.1 to 1.7 times, with the same or less CPU per GB. | [Against OpenSSH](#against-openssh-on-a-clean-path) |
 | On a long path? | 1.3 times with the default 4 MB send buffer limit, and 2.8 times at 50 ms and 5.1 times at 100 ms with it raised to 32 MB. | [Against OpenSSH](#against-openssh-on-a-clean-path), [Tuning the TCP stack](#tuning-the-tcp-stack) |
+| What about `scp`, `sftp` and an OpenSSH peer? | Same as `ssh`: 2.6 to 2.7 times faster on the long path with an HPN-SSH server. An HPN-SSH client alone gains nothing, and the `sftp` defaults are not a limit. | [scp, sftp and mixed pairs](#scp-sftp-and-mixed-pairs) |
 | On a lossy or jittery path? | `bbr` kept its clean-link speed; `cubic` lost 15 to 62 percent or stalled. | [Packet loss and congestion control](#packet-loss-and-congestion-control) |
 | Which cipher? | AES-GCM leads the default multithreaded ChaCha by 5 to 6 percent on CPUs with AES instructions; the top four are within about 10 percent. | [Cipher choice](#cipher-choice-end-to-end), [Choosing a cipher and MAC](#choosing-a-cipher-and-mac) |
 | Which MAC? | The default, `umac-64-etm`, is already the fastest. | [Choice of MAC](#choice-of-mac) |
@@ -169,7 +170,7 @@ OpenSSH does not improve, because its window is the limit. HPN-SSH reaches 78 to
 - **Software:** OpenSSH 10.6, built from the same upstream release HPN-SSH is based on, against HPN-SSH 0.3.4. Both were built from source with OpenSSL 3.5.
 - **Network:** two Linux network namespaces joined by a virtual link on a 16-core machine. The delay and a 1 Gbit/s rate limit were added with `tc netem`, half of the round trip in each direction. The LAN case has no shaping. The test hosts were otherwise idle.
 - **Transfer:** one connection, one direction, 384 to 2048 MB of data from `/dev/zero` (768 MB for the larger-limit runs), sent with `dd if=/dev/zero | ssh host 'cat > /dev/null'`. No compression. The time to connect is measured separately and subtracted. The two implementations were run in turn, and the median of 3 runs is reported. The spread between runs was under 2 percent for the long paths.
-- **Not covered:** scp and sftp, and mixed pairs (an HPN-SSH client with an OpenSSH server or the reverse). `tools/perf` can measure both (see its README) but has not been run on Linux yet. Loss and jitter are in [Packet loss and congestion control](#packet-loss-and-congestion-control). These results show the effect of the buffer limit on a clean path, not what a real network will give you.
+- **Not covered here:** scp and sftp, and mixed pairs (an HPN-SSH client with an OpenSSH server or the reverse), which are in [scp, sftp and mixed pairs](#scp-sftp-and-mixed-pairs), and loss and jitter, which are in [Packet loss and congestion control](#packet-loss-and-congestion-control). These results show the effect of the buffer limit on a clean path, not what a real network will give you.
 
 To try it yourself, build the two network namespaces, then run a transfer from one to the other:
 
@@ -186,6 +187,49 @@ sudo ip netns exec cli tc qdisc add dev vc root netem delay 25ms rate 1gbit limi
 ```
 
 Run the server inside `srv` (`sudo ip netns exec srv /path/to/sshd ...`) and time the transfer from inside `cli`. Remove everything with `sudo ip netns del srv; sudo ip netns del cli`. Kernel settings such as `tcp_wmem` are per namespace, so you can change them inside the namespaces without touching the host. The tool that automates all of this is in `tools/perf/`; see [tools/perf/README.md](tools/perf/README.md).
+
+### scp, sftp and mixed pairs
+
+The same comparison as `ssh`, with `scp` and `sftp` sending a file, and with every pairing of OpenSSH and HPN-SSH client and server, run with `tools/perf` on Linux (the first run of that harness on Linux). x86-64 server, network namespaces, 1 Gbit/s, 50 ms round trip with the TCP buffer limits raised to 32 MiB on both sides, 3 runs of 1024 MB (LAN) or 256 MB (50 ms), time to connect subtracted, MB/s as the median. Uploads only: the client sends. OpenSSH is the Ubuntu 26.04 package (10.2p1, client and server). HPN-SSH is a build of 0.4.7. The `scp` and `sftp` figures are for files sent to `/dev/null`.
+
+| Tool | Path | Cipher | OpenSSH | HPN-SSH | HPN client, OpenSSH server | OpenSSH client, HPN server |
+|---|---|---|---|---|---|---|
+| `ssh` | LAN | default | 340 | 665 | 347 | 320 |
+| `ssh` | LAN | `aes256-gcm` | 575 | 716 | 599 | 613 |
+| `ssh` | 50 ms | default | 37 | 95 | 37 | 97 |
+| `ssh` | 50 ms | `aes256-gcm` | 36 | 100 | 37 | 99 |
+| `scp` | LAN | default | 331 | 595 | 329 | 321 |
+| `scp` | LAN | `aes256-gcm` | 533 | 589 | 520 | 595 |
+| `scp` | 50 ms | default | 36 | 93 | 36 | 93 |
+| `scp` | 50 ms | `aes256-gcm` | 36 | 97 | 37 | 96 |
+| `sftp` | LAN | default | 342 | 592 | 328 | 322 |
+| `sftp` | LAN | `aes256-gcm` | 545 | 542 | 528 | 575 |
+| `sftp` | 50 ms | default | 36 | 93 | 36 | 93 |
+| `sftp` | 50 ms | `aes256-gcm` | 35 | 97 | 36 | 95 |
+
+- **`scp` and `sftp` behave like `ssh`.** On the long path HPN-SSH to HPN-SSH is 2.6 to 2.7 times faster than OpenSSH for all three tools (93 to 100 MB/s against 35 to 37), and on the LAN 1.7 to 1.8 times with the default cipher. With `aes256-gcm` on the LAN the gain is small: 0.99 to 1.24 times.
+- **The server is what makes the long path fast.** An OpenSSH client uploading to an HPN-SSH server got 93 to 99 MB/s, the same as HPN-SSH to HPN-SSH, and an HPN-SSH client uploading to an OpenSSH server got 36 to 37, the same as OpenSSH. This is consistent with the sender being held to the window the receiver advertises. Downloads, where the server sends, were not measured.
+- **On the LAN a mixed pair is no faster than OpenSSH** (0.94 to 1.12 times). The default cipher is not the multithreaded ChaCha unless both ends are HPN-SSH, which fits the default-cipher rows; with `aes256-gcm` all four pairings are within about 10 percent of each other.
+- **CPU:** at 50 ms with the default cipher HPN-SSH to HPN-SSH used 5.3 to 6.0 client CPU-seconds per GB against OpenSSH's 7.4 to 7.9, and with `aes256-gcm` the two were equal (4.5 to 5.1).
+- **Connecting is slower.** The time to connect was 150 ms for HPN-SSH against 90 ms for OpenSSH on the LAN (an HPN-SSH client alone 130, an HPN-SSH server alone 120), and about 110 to 130 ms longer at 50 ms. The cause was not investigated, and it is part of every `scp` and `sftp` command. The figures above have it subtracted.
+- `scp` to `/dev/null` prints `remote fsetstat: Bad message` at the end, after the data has been sent. It does not change the time.
+
+#### sftp request size and queue depth
+
+`sftp` has its own limits, set with `-B` (the size of each request) and `-R` (the number in flight). They could limit a transfer whatever the cipher, so the same 50 ms path was run with different values (`aes256-gcm`, 256 MB, 3 runs, MB/s):
+
+| `sftp` options | OpenSSH | HPN-SSH | HPN client, OpenSSH server | OpenSSH client, HPN server |
+|---|---|---|---|---|
+| none (the defaults) | 36 | 97 | 36 | 95 |
+| `-R 16` | 35 | 72 | 36 | 71 |
+| `-B 65536 -R 128` | 36 | 98 | 37 | 95 |
+| `-B 131072 -R 256` | 36 | 97 | 37 | 96 |
+
+- **The defaults are not the limit.** Without `-B` the client takes the request size from the server's advertised limits, up to 255 KiB (the 256 KiB message limit minus 1 KiB), and the default queue is 64 requests in OpenSSH's `sftp` and 1024 in this fork's. That is far more than a 50 ms path holds, and larger values changed nothing.
+- **A small queue does limit HPN-SSH.** `-R 16` cut it to 72 MB/s, which fits 16 requests of about 255 KiB (4 MiB) per 50 ms round trip, about 80 MB/s. It did not change OpenSSH, because its 2 MiB channel window is the smaller limit.
+- **`-B` has a ceiling.** `sftp -B 262144` fails with `Outbound message too long 262169`, because the 256 KiB message limit has to hold the request header too.
+- The harness had a bug that recorded that failure as a result; it is fixed in 0.6.0.
+- Not tried: `scp -X nrequests=` and `-X copy_buffer=`, and a larger window than 50 ms.
 
 ### Packet loss and congestion control
 

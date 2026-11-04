@@ -131,6 +131,13 @@ for bad in "--conds lan_jit5" "--conds wan50_loss" "--tools ftp" "--pairs hpn:ss
     # shellcheck disable=SC2086 # the options are meant to split
     if dry $bad >/dev/null; then fail "perf dry run accepted: $bad"; fi
 done
+out="$(dry --conds lan --tools sftp,scp --sftp-opts "-B 262144 -R 128" --scp-opts "-X nrequests=64" --pairs hpn:hpn --ciphers default --runs 1)"
+if grep -q '^case tool=sftp(-B_262144_-R_128) client=hpn server=hpn cipher=default ' <<<"$out" \
+   && grep -q '^case tool=scp(-X_nrequests=64) client=hpn server=hpn cipher=default ' <<<"$out"; then :; else
+    fail "perf dry run: the sftp and scp options should be part of the tool name: $out"
+fi
+out="$(dry --conds lan --tools sftp --pairs hpn:hpn --ciphers default --runs 1)"
+grep -q '^case tool=sftp client=hpn ' <<<"$out" || fail "perf dry run: a tool without options keeps its plain name: $out"
 pass "perf.sh run --dry-run plans the cases, netem settings and thread counts, and rejects bad input"
 
 # --- tools/tune-tcp.sh -------------------------------------------------------

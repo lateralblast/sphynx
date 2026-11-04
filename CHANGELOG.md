@@ -4,6 +4,23 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-04
+
+### Added
+
+- The README has a "scp, sftp and mixed pairs" section, the first results from `tools/perf` on Linux (216 runs, none failed). `scp` and `sftp` behave like `ssh`: 2.6 to 2.7 times faster than OpenSSH on a 50 ms path. The gain comes from the server: an OpenSSH client uploading to an HPN-SSH server got 93 to 99 MB/s, and an HPN-SSH client uploading to an OpenSSH server got OpenSSH's 36 to 37. The `sftp` request size and queue depth (`-B`, `-R`) are not a limit at their defaults, and only a small `-R` (16) lowered HPN-SSH, to 72 MB/s. `sftp -B 262144` fails because of the 256 KiB message limit. HPN-SSH takes 60 to 130 ms longer to connect. The TODO item on `scp` and `sftp` is closed.
+- `tools/perf/README.md` says what has now been run on Linux and how to test a build tree.
+
+## [0.6.0] - 2026-11-04
+
+### Added
+
+- `tools/perf/perf.sh run` takes `--sftp-opts` and `--scp-opts`, extra options for `sftp` (for example `"-B 131072 -R 256"`) and `scp` (for example `"-X nrequests=128"`). They are part of the tool name in the CSV, as `sftp(-B_131072_-R_256)`, so one CSV can hold several settings. `tests/run-tests.sh` checks the names in a dry run.
+
+### Fixed
+
+- `tools/perf/perf.sh run` no longer records a client that failed as a measurement. When a client died before timing anything, for example `sftp -B 262144` (`Outbound message too long`), the last line of its output was read as the elapsed time and the CSV got `sftp>` in the number columns. A run is now kept only if it gives three numbers; otherwise it is `nan`, shown as `-` by `analyze`, and reported on standard error.
+
 ## [0.5.9] - 2026-11-04
 
 ### Changed

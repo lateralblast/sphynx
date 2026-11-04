@@ -123,7 +123,7 @@ write_configs() {
     mkdir -p "$WORK"
     [ -f "$WORK/id" ] || ssh-keygen -q -t ed25519 -N "" -f "$WORK/id"
     [ -f "$WORK/host_key" ] || ssh-keygen -q -t ed25519 -N "" -f "$WORK/host_key"
-    local name port sftp_server out
+    local name port sftp_server
     for name in base hpn; do
         port=$BASE_PORT; sftp_server=$BASE_SFTP_SERVER
         [ "$name" = hpn ] && { port=$HPN_PORT; sftp_server=$HPN_SFTP_SERVER; }
@@ -139,12 +139,6 @@ StrictModes no
 PidFile $WORK/sshd_$name.pid
 Subsystem sftp $sftp_server
 CFG
-        # a build without PAM (a build tree rather than the package) rejects UsePAM
-        local bin="$BASE_SSHD"; [ "$name" = hpn ] && bin="$HPN_SSHD"
-        if [ -x "$bin" ] && out="$("$bin" -t -f "$WORK/sshd_$name.conf" 2>&1)" ; then :
-        elif grep -q 'Unsupported option UsePAM' <<<"${out:-}"; then
-            sed -i '/^UsePAM no$/d' "$WORK/sshd_$name.conf"
-        fi
     done
 }
 
@@ -407,7 +401,9 @@ run_matrix() {
                 IFS=: read -r c sv lab <<<"$entry"
                 e="" u="" s=""
                 read -r e u s < <(one "$tool" "$c" "$sv" "$use" "$size" "$thr" || true)
-                [ -n "$e" ] || echo "perf: warning: $tool $c:$sv $cipher $cond failed (run $run)" >&2
+                # a client that failed before timing anything leaves other output last
+                [[ "$e" =~ ^[0-9]+(\.[0-9]+)?$ && "$u" =~ ^[0-9]+(\.[0-9]+)?$ && "$s" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { e=""; u=""; s=""; }
+                [ -n "$e" ] || echo "perf: warning: $(tool_label "$tool") $c:$sv $cipher $cond failed (run $run)" >&2
                 echo "$c,$cipher,$cond,$run,$size,${e:-nan},${u:-nan},${s:-nan},$(tool_label "$tool"),$sv,$lab" >>"$out"
             done
         done

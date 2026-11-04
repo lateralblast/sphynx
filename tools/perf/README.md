@@ -36,6 +36,8 @@ tools/perf/perf.sh teardown
 |---|---|---|
 | `--conds LIST` | `lan,wan50,wan100` | Comma list of conditions. `lan` has no shaping. `wanNN` is an NN ms round trip, half in each direction. Either can be followed by `_lossPERCENT` and `_jitMS`, for example `wan50_loss0.5` or `wan100_loss0.1_jit5`. See [Loss and jitter](#loss-and-jitter). |
 | `--tools LIST` | `ssh` | Comma list of `ssh`, `scp` and `sftp`. See [scp and sftp](#scp-and-sftp). |
+| `--sftp-opts STR` | none | Extra options for `sftp`, for example `"-B 262144 -R 128"`. It becomes part of the tool name in the CSV, `sftp(-B_262144_-R_128)`. |
+| `--scp-opts STR` | none | Extra options for `scp`, for example `"-X nrequests=128 -X copy_buffer=262144"`. Named in the CSV the same way. |
 | `--pairs LIST` | `base:base,hpn:hpn` | Comma list of `CLIENT:SERVER`, each `base` (OpenSSH) or `hpn` (HPN-SSH). `hpn:base` is an HPN-SSH client against an OpenSSH server and `base:hpn` is the reverse. |
 | `--threads LIST` | `default` | Comma list of `SSH_CIPHER_THREADS` values, each a number or `default` (unset). See [Cipher threads](#cipher-threads). |
 | `--ciphers LIST` | `default`, `chacha20-poly1305@openssh.com`, `aes256-ctr`, `aes256-gcm@openssh.com` | Comma list. `default` is each side's own default cipher. |
@@ -71,6 +73,10 @@ tools/perf/perf.sh run --conds wan50,wan100 --ciphers default,aes256-ctr \
 
 The client programs come from the same directory as `ssh` unless you set `BASELINE_SCP`, `BASELINE_SFTP`, `HPN_SCP` and `HPN_SFTP`, and the SFTP servers are `$BASELINE_PREFIX/libexec/sftp-server` and `/usr/lib/hpnssh/hpnsftp-server` unless you set `BASELINE_SFTP_SERVER` and `HPN_SFTP_SERVER`. Each client is run with `-S` so it uses the `ssh` of its own implementation.
 
+`--sftp-opts` and `--scp-opts` pass extra options to the client, so the request size and the number of requests in flight can be compared (`sftp -B` and `-R`, `scp -X copy_buffer=` and `-X nrequests=`). Run the same case once for each setting, each to its own `--out`, and compare with `analyze`; the options are part of the tool name, so one CSV can hold several.
+
+Both tools send to `/dev/null`. `scp` finishes by setting the file's attributes, which the server refuses for a device, so it prints `remote fsetstat: Bad message` after the data has been sent. The time is still the time of the transfer.
+
 OpenSSH's `scp` has used the SFTP protocol by default since 9.0. A run that fails, for example because a client and server do not agree on a protocol, is recorded as `nan`, printed as `-` by `analyze`, and reported on standard error.
 
 ### Mixed pairs
@@ -100,4 +106,4 @@ The CSV has the columns `impl,cipher,cond,run,mb,elapsed,user,sys,tool,server,th
 
 ## Limits
 
-The scp, sftp, mixed pair, thread count, loss and jitter options were written on a machine without Linux, so they have been tested only with `--dry-run` and `analyze`, never run. Expect to find problems on the first real run. Loss and jitter are applied in each direction, so the round trip sees about twice the figure. There is one connection and one direction. The CPU figures include the `dd` that feeds the pipe, which is small. CPU use varies a little between runs, so read the CPU range that `analyze` prints as well as the median.
+The scp, sftp and mixed pair options were run on Linux on 2026-11-04 (216 runs, no failures; the results are in the main README under [scp, sftp and mixed pairs](../../README.md#scp-sftp-and-mixed-pairs)). The thread count, loss and jitter options have not been run through this harness: those measurements were made with separate scripts, so expect to find problems the first time. Loss and jitter are applied in each direction, so the round trip sees about twice the figure. There is one connection and one direction (the client sends). The CPU figures include the `dd` that feeds the pipe, which is small. CPU use varies a little between runs, so read the CPU range that `analyze` prints as well as the median. A build tree can be tested without installing: set `HPN_SSH`, `HPN_SSHD`, `HPN_SCP`, `HPN_SFTP` and `HPN_SFTP_SERVER`, and the baseline with `BASELINE_SSH`, `BASELINE_SSHD`, `BASELINE_SCP`, `BASELINE_SFTP` and `BASELINE_SFTP_SERVER`. When `hpnsshd` runs as root its privilege separation directory must be owned by root and not writable by anyone else.
