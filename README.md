@@ -2,9 +2,13 @@
 
 # sphynx
 
+SSH Performance Hacks Yielding Network eXcellence
+
 Version: 0.4.7
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
+
+It also includes patches that provide additional bug fixes and performance tweaks.
 
 ## Contents
 
