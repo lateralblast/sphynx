@@ -4,6 +4,228 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-11-05
+
+### Fixed
+
+- The `%C` hash in `ControlPath` now marks where each field ends, so connections whose host, port, user and jump host run together (host `10.0.0.1` port `2222` and host `10.0.0.12` port `222`) no longer share a master (patch 0068, from OpenSSH). The path of every `%C` master changes, so one started by an earlier version is not found by this one.
+
+## [1.1.8] - 2026-11-05
+
+### Fixed
+
+- `hpnssh -Q addressfamily` lists the values `AddressFamily` accepts, as in OpenSSH, and `-Q help` and `hpnssh(1)` name it (patch 0067).
+
+## [1.1.7] - 2026-11-05
+
+### Fixed
+
+- With `UpdateHostKeys`, when the first known hosts file cannot be written the client no longer deletes the host's entries from the others, which lost them without recording the new keys anywhere (patch 0066, from OpenSSH).
+
+## [1.1.6] - 2026-11-05
+
+### Fixed
+
+- `ssh -Z` now lists the keys it would try when a `ControlPath` master is running; it used to open a session through the master and print nothing (patch 0065, from OpenSSH).
+
+## [1.1.5] - 2026-11-05
+
+### Fixed
+
+- `CanonicalizePermittedCNAMEs` now matches the name the resolver returns in lower case, so a negated target pattern can no longer be evaded by changing its case (patch 0064, from OpenSSH).
+
+## [1.1.4] - 2026-11-05
+
+### Fixed
+
+- When a multiplexed session is cancelled the master now also closes the client's stderr, and a session whose output is waiting to drain is closed too, so the server can no longer keep writing extended data to it (patch 0063, from OpenSSH).
+
+## [1.1.3] - 2026-11-05
+
+### Fixed
+
+- The client no longer sends `SIGHUP` to a `ProxyCommand` pid that was already reaped, which could by then belong to another process (patch 0062, from OpenSSH).
+
+## [1.1.2] - 2026-11-05
+
+### Fixed
+
+- `ConnectTimeout` now also bounds the key exchange: a server that sent its banner and then said nothing used to hold the client for as long as the connection lasted (patch 0061, from OpenSSH).
+
+## [1.1.1] - 2026-11-05
+
+### Fixed
+
+- A write error or a full disk no longer replaces `known_hosts` with a truncated copy when `UpdateHostKeys` rewrites it, a read error is no longer taken for the end of the file, and a `@revoked` or `@cert-authority` marker followed by a tab is recognised (patch 0060, from OpenSSH).
+
+## [1.1.0] - 2026-11-05
+
+### Fixed
+
+- A host key marked `@revoked` in `known_hosts` could still be accepted: an entry without a port on a port other than 22, an entry for the IP address while the host name had a matching entry, and a secure `VerifyHostKeyDNS` match. All three are refused now, as in OpenSSH (patch 0059).
+
+## [1.0.9] - 2026-11-05
+
+### Fixed
+
+- With `StrictHostKeyChecking=no` and a changed host key, `~C -L` and forward requests over a control master were still carried out; they are now refused, as in OpenSSH (patch 0058).
+
+## [1.0.8] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `channels.c`: a peer could send more than the advertised window, up to the 10 percent grace, reset the excess count with a packet that fitted, and do it again, getting about 12 MB of extra buffered data per adjust cycle with the dynamic window and window credit for it. The excess now saturates, is not reset, and `channel_check_window()` forgives it as it is consumed instead of handing it back. This is the change OpenSSH made, ported from `openssh-portable/`. Patch 0057. No test: it needs a peer that overshoots the window, which `hpnssh` does not do; the transfer checks still pass.
+
+## [1.0.7] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: if the `lseek` after a hash match failed in the `scp -Z` source, it moved on to the next file without sending the match status the sink was waiting for, which put the sink out of step. It now answers `F` and sends the whole file. Patch 0056. No test: a regular file does not fail the seek. Found by a review agent.
+
+## [1.0.6] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: the `scp -Z` source hashed the file by name after opening it, so a file replaced in between gave a hash of one file and the bytes of another. It now hashes the descriptor it sends from (`calculate_hash_fd()`, with `pread()`). Patch 0055. No test of the race; the resume tests in `tests/scp-resume.sh` still pass. Found by a review agent.
+
+## [1.0.5] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: the `scp -Z` sink looks at the destination when the record arrives and appends the tail when all of it has arrived, so another writer in between made it append to a file that was no longer the one the sender had checked. It now checks the size is unchanged first, and if not reports it, leaves the file alone and removes the temporary tail. Only the size is checked, so a change that keeps the length is not caught. Patch 0054; case 16 in `tests/scp-resume.sh` appended to the changed file before. Found by a review agent.
+
+## [1.0.4] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: `scp -Z` to a destination file it cannot write printed `Permission denied`, skipped the file and exited 0, so the copy looked as if it had worked. It now exits with a failure status. The protocol is unchanged. Patch 0053; case 15 in `tests/scp-resume.sh` returned 0 before. A file that is skipped because it is identical is still a success. Found by a review agent.
+
+## [1.0.3] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: after an `R` reply to a resume request, the `scp -Z` source tested the byte after the hash for `S` (skip) and `C` (send all), not the reply's type, so a sink that put an `S` there made it skip the file, and a `C` made it send zeros past the end of a file it had already seeked into. It tests the first byte of the reply. Patch 0052; case 14 in `tests/scp-resume.sh` skipped the file before. Found by a review agent.
+
+## [1.0.2] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: a connection that ended partway through the tail of an `scp -Z` resume lost what had arrived: the tail is written to a temporary file and appended only when complete, and the drop exit did neither, so the next run sent the same bytes again and `name<8 random>` was left in the directory. The sink now writes what it has, appends it to the target and removes the temporary file before reporting the error. The append is in a function, `resume_append()`, that the normal path uses too, and that still restores the target's length if the append fails. Patch 0051; case 13 in `tests/scp-resume.sh` cuts a transfer at 900000 bytes and failed before.
+
+## [1.0.1] - 2026-11-05
+
+### Changed
+
+- The review item on the files no reviewer had read is closed, except the OpenSSL 1.1 Poly1305 `EVP_PKEY` path, which cannot be built here and stays under the non-OpenSSL-3 build item. `servconf.c` `assemble_algorithms`, `Match` handling of `NoneEnabled` (which had no effect: patch 0041), `cipher-switch.c` across several sessions (a rekey per session and a hang in the forked child: patches 0039 and 0040), `sshd-auth.c` and the rest of `sshconnect.c` were read. `binn` validates a remote blob in `binn_is_valid_ex`, which checks every key and value against the length given (checked by `tests/c/metrics_blob.c`).
+
+## [1.0.0] - 2026-11-05
+
+### Changed
+
+- The review of the HPN-only changes in `scp.c`, `clientloop.c`, `sshconnect.c`, `sshconnect2.c`, `ssh.c`, `mux.c`, `cipher-switch.c`, `packet.c`, `kex.c`, `channels.c`, `sshd-auth.c`, `sshd-session.c`, `servconf.c`, `serverloop.c`, `session.c`, `monitor.c` and `myproposal.h` is closed. Three read-only review agents read them, and each finding was checked by running it before it was fixed (patches 0023 to 0050) or recorded as a new TODO item. One report did not reproduce (the `FallbackPort` timeout), and one is old upstream behaviour that was left (window credit in `channels.c`). The review was by reading, so it is not proof that nothing is left.
+
+## [0.9.9] - 2026-11-05
+
+### Added
+
+- `tests/daemon-checks.sh` has two more checks with no code change. A review report said the attempt on `FallbackPort` after a timed out connect to the default port has no `ConnectTimeout`; it does not reproduce (both attempts stop at 2 seconds against listeners that never answer), and the check keeps it that way. And the cipher proposal the client sends is checked to put the serial ChaCha directly after the multithreaded one (`patch_list`, patch 0008), on the real `-vv` output.
+
+## [0.9.8] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `mux.c`: a control master that had switched to the none cipher (`NoneSwitch yes`, started with `-N`, so without a terminal) accepted a later shared session with a terminal (`-t`), which then ran in clear text, against the rule that the none cipher is not used with a terminal. The master now refuses a terminal request while it uses the none cipher, and the client falls back to a connection of its own, which is encrypted. Patch 0050; `tests/daemon-checks.sh` checks for the refusal. Found by a review agent.
+
+## [0.9.7] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: in `scp -Z` mode, when the sink could not open the target after the resume reply (a directory in the way, a name too long for the temporary file, an unwritable directory), the sender was already sending the file, and the sink read its bytes as control records and lost the rest of the transfer. It now reads and drops the file's bytes and the closing NUL, then reports the error. Patch 0049; case 12 in `tests/scp-resume.sh` lost the next file before. Found by a review agent.
+
+## [0.9.6] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: `scp -Z` to a target that is not a regular file, such as `/dev/null` or a fifo, treated its size of 0 as a file to resume and tried to create `/dev/nullXXXXXXXX` beside it (as root it left that file and appended to `/dev/null`). It now sends the whole file and writes to the target as it is, as `scp` does without `-Z`. Patch 0048; case 11 in `tests/scp-resume.sh` failed before. Found by a review agent.
+
+## [0.9.5] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `scp.c`: in `scp -Z` mode the sink read the sender's match status byte without checking the read and with a variable it had not initialised, so a connection that ended there let it go on and create the temporary file for the tail. A failed read is now a protocol error. Patch 0047; case 10 in `tests/scp-resume.sh` left a temporary file before. Found by a review agent.
+
+## [0.9.4] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `kex.c`: the promotion to the multithreaded ChaCha left `newkeys->enc.name` pointing at freed memory if the cipher lookup failed, which would have been freed again on the error path. The pointer is cleared after the free. The lookup cannot fail in practice, so this is a guard, with no test. Patch 0046. Found by a review agent.
+
+## [0.9.3] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `clientloop.c` and `serverloop.c`: the metrics code asked the kernel for `tcp_info` into a struct that was not cleared, so on a kernel with a shorter `tcp_info` than the header the tail was stack contents, written to the client's metrics file and sent to the client in the server's reply; the client also passed a `size_t` cast to `socklen_t *`, which reads the wrong half of the length on a big-endian host. The struct is cleared and the length is a `socklen_t`. Patch 0045. No test: it needs a kernel with a shorter `tcp_info`; the existing metrics checks in `tests/daemon-checks.sh` still pass. Found by review agents.
+
+## [0.9.2] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `clientloop.c`, `clientloop.h` and `mux.c`: the prompts the client loop runs (`ControlMaster ask`, `~C`, `UpdateHostKeys ask`) ran with HUP, INT, QUIT and TERM blocked, so Ctrl-C did not interrupt them and the `SSH_ASKPASS` program inherited the blocked mask (`SigBlk: 0000000000004007`). They now run with the loop's original mask, as the commands do since 0.7.0. Patch 0044; `tests/daemon-checks.sh` runs the askpass of a `ControlMaster ask` master and reads its mask. The Ctrl-C part has no test. Found by a review agent.
+
+## [0.9.1] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `servconf.c`: `hpnsshd -T` did not print `DisableMTAES`. It does now. Patch 0043; `tests/daemon-checks.sh` checks it.
+
+## [0.9.0] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `servconf.c`: the table for `TCPKeepAlive` had no terminating entry, so a value that is not in it was looked up past its end, in the next table. `TCPKeepAlive no-pq-kex` was accepted, as `no`. The table now ends like upstream's. Patch 0042; `tests/daemon-checks.sh` checks that `bogus` and `no-pq-kex` are refused and the four valid values accepted. Found by a review agent.
+
+## [0.8.9] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `sshd-session.c`: `NoneEnabled no` and `NoneMacEnabled no` in a `Match` block had no effect. The key exchange proposal is made before the user is known, with `none` added from the global settings, and nothing took it out again, so after login the client could switch to the none cipher and none MAC. The post-authentication process now removes `none` from the proposal where the options, with the `Match` blocks applied, do not allow it. A client that asks for it is refused. Patch 0041; `tests/daemon-checks.sh` runs a second daemon with such a `Match` block and requires that the switch does not happen. Found by a review agent and confirmed by running it.
+
+## [0.8.8] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `cipher-ctr-mt-functions.c`: with a multiplexed (`ControlMaster`) or otherwise multi-session connection over `aes256-ctr`, the second session never finished. After the switch to the multithreaded cipher, the process sshd forks for a session freed the cipher before running the command, and waited for pregeneration threads that exist only in the parent. The cipher now records the process that started its threads and, in any other, neither cancels nor joins them. The same change is made in `cipher-ctr-mt.c`, which is not compiled here and so is untested. Patch 0040; `tests/c/aes_ctr_mt_fork.c` hung on the old code and passes, and `tests/daemon-checks.sh` runs three sessions on a multiplexed `aes256-ctr` connection. Found by following the review agent's report of an extra rekey per session.
+
+## [0.8.7] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `cipher-switch.c`: every session channel on a connection asked for another rekey to the multithreaded cipher, because the multithreaded AES-CTR context keeps the plain cipher name and the test for `ctr` in it was true each time. Three sessions on a multiplexed `aes256-ctr` connection started five key exchanges; the switch is now made once. Patch 0039; `tests/daemon-checks.sh` counts the key exchanges. Found by a review agent and confirmed by running it.
+
+## [0.8.6] - 2026-11-05
+
+### Changed
+
+- The review item on compiler warnings is closed without changing the code. A build with gcc 15.2 gives 13 warnings, none in HPN-added lines: eight `-Wdiscarded-qualifiers` from `strchr` and friends returning `const` in the C23 library (`base64.c`, `getopt_long.c`, `hostfile.c` twice, `match.c`, `misc.c`, `mux.c`, `clientloop.c`), and five `-Wformat-truncation` on formats that truncate on purpose (`log.c` three, `misc.c`, `ssh-keygen.c`, `scp.c`). The two the review put in HPN's files, `scp.c` and `clientloop.c`, are OpenSSH's lines too. Patching them would change 11 upstream files and make every rebase harder.
+
+## [0.8.5] - 2026-11-05
+
+### Changed
+
+- The review item on the `XXX` notes in `sshkey-xmss.c` is closed with no change. They are OpenSSH's own notes from 2022 (the file is in the HPN-SSH base, and upstream OpenSSH has since removed it), not HPN-added code, and XMSS is not compiled in (`WITH_XMSS` is not defined in the build).
+
+## [0.8.4] - 2026-11-05
+
+### Changed
+
+- The review item on `strcpy` in `binn.c:3503,3505` is closed: the calls copy `"true"` and `"false"` (at most 6 bytes) into a 128 byte buffer, so they cannot overflow. No code change.
+
+## [0.8.3] - 2026-11-05
+
+### Fixed
+
+- `sphynx-ssh` `cipher-ctr-mt-functions.c`: freeing a multithreaded AES-CTR cipher context cleared all 17 MB of it, including the keystream queues that were never used (a connection uses 2 of 33 with the default thread count), touching every page. It now clears only the part before the queues, the queues in use and the part after. Measured on arm64 Linux: 0.52 ms per start and free before, 0.39 after; the resident size is the same within 1 MB, because the 17 MB was virtual. Patch 0038; the existing `tests/c/aes_ctr_mt_init.c` and `aes_ctr_mt_crypt.c` pass. No test checks the saving.
+
 ## [0.8.2] - 2026-11-05
 
 ### Fixed

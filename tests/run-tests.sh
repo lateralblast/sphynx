@@ -304,7 +304,7 @@ pass "config files are marked as conffiles"
 
 tree="$TEST_DIR/build/ubuntu/src"
 
-for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt aes_ctr_mt_init huff0_roundtrip metrics_blob cipher_leaks chachapoly_mt_fork happyeyeballs_gap; do
+for t in chachapoly_mt_bounds patch_list aes_ctr_mt_crypt aes_ctr_mt_init huff0_roundtrip metrics_blob cipher_leaks chachapoly_mt_fork happyeyeballs_gap aes_ctr_mt_fork; do
     tests/build-c-test.sh "$tree" "tests/c/$t.c" "$TEST_DIR/$t" >"$TEST_DIR/$t.build" 2>&1 \
         || { tail -n 20 "$TEST_DIR/$t.build" >&2; fail "could not build tests/c/$t.c"; }
     "$TEST_DIR/$t" >"$TEST_DIR/$t.out" 2>&1 \
@@ -358,6 +358,20 @@ pass "a failed HappyEyes connect says why, and names the port"
 [ "$("$tree/hpnssh" -G -oCompression=yes localhost | grep -c '^compression yes$')" = 1 ] \
     || fail "hpnssh does not accept Compression=yes"
 pass "hpnssh lists the huff0@hpnssh.org compression method"
+
+# -Q addressfamily was not a query term (1.1.8, taken from upstream)
+[ "$("$tree/hpnssh" -Q addressfamily | tr '\n' ' ')" = "inet inet6 any " ] \
+    || fail "hpnssh -Q addressfamily does not list inet, inet6 and any"
+"$tree/hpnssh" -Q help | grep -qx addressfamily || fail "hpnssh -Q help does not list addressfamily"
+pass "hpnssh -Q addressfamily lists the address families"
+
+# The %C hash did not mark where one field ends: host 10.0.0.1 with port 2222 and host 10.0.0.12 with port 222 gave the
+# same ControlPath, so two different connections could share a master (1.1.9, taken from upstream)
+h1="$("$tree/hpnssh" -G -F /dev/null -o ControlPath=/x/%C -p 2222 10.0.0.1 2>/dev/null </dev/null | grep '^controlpath ')"
+h2="$("$tree/hpnssh" -G -F /dev/null -o ControlPath=/x/%C -p 222 10.0.0.12 2>/dev/null </dev/null | grep '^controlpath ')"
+[ -n "$h1" ] && [ -n "$h2" ] || fail "hpnssh -G did not print a ControlPath"
+[ "$h1" != "$h2" ] || fail "two different connections have the same %C ControlPath hash"
+pass "the %C hash tells apart connections whose fields run together"
 
 sc_line="$(tools/suggest-cipher.sh --no-measure --config)"
 for opt in Ciphers MACs; do

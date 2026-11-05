@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 0.8.2
+Version: 1.1.9
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -795,6 +795,37 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0035 | `chachapoly-mt`: repair the keystream state in a forked child. | 0.7.8 | yes |
 | 0036 | `happyeyeballs`: read `fd_ai` only for its own sockets and keep `errno` on failure. | 0.7.9 | yes |
 | 0037 | `sshconnect`: name the port in the connect failure message. | 0.8.2 | yes |
+| 0038 | `cipher-ctr-mt`: clear only the keystream queues that were used. | 0.8.3 | yes |
+| 0039 | `cipher-switch`: switch to the multithreaded cipher once per connection. | 0.8.7 | yes |
+| 0040 | `cipher-ctr-mt`: do not cancel or join pregeneration threads in a forked child. | 0.8.8 | yes |
+| 0041 | `sshd-session`: drop `none` from the proposal where a `Match` block turns it off. | 0.8.9 | yes |
+| 0042 | `servconf`: end the `TCPKeepAlive` table with a NULL entry. | 0.9.0 | yes |
+| 0043 | `servconf`: print `DisableMTAES` in `sshd -T`. | 0.9.1 | yes |
+| 0044 | `clientloop`, `mux`: give prompts and their askpass the signals the loop blocks. | 0.9.2 | yes |
+| 0045 | `clientloop`, `serverloop`: clear `tcp_info` before the kernel fills it, and use a `socklen_t`. | 0.9.3 | yes |
+| 0046 | `kex`: clear the cipher name after freeing it in the ChaCha promotion. | 0.9.4 | yes |
+| 0047 | `scp`: treat a failed read of the resume match status as a protocol error. | 0.9.5 | yes |
+| 0048 | `scp`: with `-Z`, write to a target that is not a regular file as it is. | 0.9.6 | yes |
+| 0049 | `scp`: keep in step when the `-Z` sink cannot open the target. | 0.9.7 | yes |
+| 0050 | `mux`: refuse a terminal session over a connection that uses the none cipher. | 0.9.8 | yes |
+| 0051 | `scp`: keep the part of a resumed tail that arrived when the connection drops. | 1.0.2 | yes |
+| 0052 | `scp`: read the type of the resume reply from its first byte. | 1.0.3 | yes |
+| 0053 | `scp`: report a skipped unwritable destination as a failure with `-Z`. | 1.0.4 | yes |
+| 0054 | `scp`: do not append a resumed tail to a file that changed in the meantime. | 1.0.5 | yes |
+| 0055 | `scp`: hash the descriptor the source sends from, not the name. | 1.0.6 | yes |
+| 0056 | `scp`: answer with a match status when the `-Z` source cannot seek. | 1.0.7 | yes |
+| 0057 | `channels`: forgive window excess as it drains, as OpenSSH does. | 1.0.8 | yes |
+| 0058 | sshconnect: refuse forwarding after a host key that failed verification (`hostkey_untrusted`) | 1.0.9 | yes |
+| 0059 | sshconnect: never accept a host key that known_hosts marks as revoked (port-less, address and DNS cases) | 1.1.0 | yes |
+| 0060 | hostfile: check for write and read errors, and find the end of a marker | 1.1.1 | yes |
+| 0061 | sshconnect: let ConnectTimeout cover the key exchange | 1.1.2 | yes |
+| 0062 | ssh: forget the ProxyCommand once it has been reaped | 1.1.3 | yes |
+| 0063 | mux: close the client stderr when a session is cancelled | 1.1.4 | yes |
+| 0064 | ssh: lowercase the resolver CNAME before matching CanonicalizePermittedCNAMEs | 1.1.5 | yes |
+| 0065 | ssh: do not use a control master for -Z | 1.1.6 | yes |
+| 0066 | clientloop: stop updating known_hosts after the first file fails | 1.1.7 | yes |
+| 0067 | ssh: add -Q addressfamily | 1.1.8 | yes |
+| 0068 | readconf: keep the fields of the %C hash apart | 1.1.9 | yes |
 
 Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
 
@@ -863,7 +894,7 @@ SPHYNX_SKIP_BUILD=1 tests/run-tests.sh   # skip the end-to-end build
 
 The tests check that the version matches in `sphynx`, `README.md` and `CHANGELOG.md`, check the command line, run shellcheck, and build a package and inspect its metadata and contents. They also run the C tests in `tests/c/`, the `scp -Z` tests, the checks in `tests/daemon-checks.sh` (below), a check of the performance analysis script, and the TCP tuning script's tests. The tuning script's tests that change settings need passwordless `sudo` and run only inside a throwaway network namespace; without `sudo` they are skipped.
 
-`tests/daemon-checks.sh <build-tree>` starts `hpnsshd` from a build tree as the current user on a free loopback port, with a throwaway key and configuration, and checks things that need a running server: a client can log in; a session survives an unwritable `MetricsPath`, and `Metrics yes` writes both files; the none switch rekey keeps the client's `KexAlgorithms`; the none MAC is refused with a real cipher and used with the none cipher after login; a command started from `~C` has no signals blocked (`tests/escape-sigmask.py`, on a pseudo terminal); the server logs the throughput line once for a session that was cut off; data sent over `aes256-ctr` arrives intact after the switch to the multithreaded cipher; `FallbackPort` at the default port gives up; and a control master built with AddressSanitizer survives a session that starts with `scp`. It installs nothing and writes only to a temporary directory. The suite runs it on Linux; some checks are skipped on other systems.
+`tests/daemon-checks.sh <build-tree>` starts `hpnsshd` from a build tree as the current user on a free loopback port, with a throwaway key and configuration, and checks things that need a running server: a client can log in; a session survives an unwritable `MetricsPath`, and `Metrics yes` writes both files; the none switch rekey keeps the client's `KexAlgorithms`; the none MAC is refused with a real cipher and used with the none cipher after login; a command started from `~C` has no signals blocked (`tests/escape-sigmask.py`, on a pseudo terminal); the server logs the throughput line once for a session that was cut off; data sent over `aes256-ctr` arrives intact after the switch to the multithreaded cipher; `FallbackPort` at the default port gives up; a control master built with AddressSanitizer survives a session that starts with `scp`; three sessions on one multiplexed `aes256-ctr` connection all finish, and start no more than the expected key exchanges; `NoneEnabled no` in a `Match` block stops the switch to the none cipher; a multiplexed session cannot have a terminal over the none cipher; the askpass of a `ControlMaster ask` prompt has no signals blocked; `TCPKeepAlive` refuses a value outside its table, and `hpnsshd -T` shows `DisableMTAES`; the cipher proposal puts the serial ChaCha directly after the multithreaded one; and `ConnectTimeout` holds for the `FallbackPort` attempt. It installs nothing and writes only to a temporary directory. The suite runs it on Linux; some checks are skipped on other systems.
 
 `tests/package-lifecycle.sh` is not part of that suite. It installs, upgrades, removes, reinstalls and purges the built `.deb` on a machine, and checks the `hpnsshd` user, the host keys, the service and a login on port 2222. It changes the machine it runs on, so run it only in a throwaway VM or container that runs systemd. Its header has the commands for OrbStack.
 

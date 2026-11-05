@@ -6,6 +6,9 @@ See [HANDOFF.md](HANDOFF.md) for the current state and suggested order.
 
 ## Open
 
+- [ ] sphynx-ssh: the HPN-SSH base is older than `openssh-portable/` (OpenSSH commits to 2026-11-02, the base stops about a month earlier), and 60 files have an older `$OpenBSD` revision. Taken so far as patches 0058 to 0068 (1.0.9 to 1.1.9): `hostkey_untrusted`, the revoked-key checks, the `hostfile.c` fixes, `ConnectTimeout` over the key exchange, the `proxy_command_pid` race, the mux stderr close, CNAME lowercasing, `-Z` through a master, the `UpdateHostKeys` `break`, `-Q addressfamily` and the `%C` hash. Still to port: the `%j` token and `ssh -G` ProxyJump text (`ssh_jump_spec` in `readconf.c`), glob errors for `Include` (`include_glob_error`), `ForkAfterAuthentication` implying `StdinNull`, in `misc.c` the poll timeout deadline and the `mkdirs` loop (`p != '\0'` tests the pointer), and the other files not yet compared: `auth*.c`, `monitor*.c`, `kex.c`, `packet.c`, `krl.c`, `sftp*.c`, `ssh-keygen.c`, `ssh-agent.c`, `sshkey.c`. Compare each against `openssh-portable/`, leave HPN's own changes, one patch each.
+- [ ] sphynx-ssh: `scp -Z` skips an identical file without applying `-p` times and mode from the source (the exit status is right: it is a success). The other low findings in `scp.c` are fixed in 1.0.3 to 1.0.7; the changed-destination check compares sizes only, so a change that keeps the length is not caught.
+- [ ] sphynx-ssh: `Match ... NoneEnabled yes` under a global `NoneEnabled no` does nothing, because the `none` entries are added to the proposal from the global setting before the user is known (patch 0041 only handles the `no` direction). Either document that the options are effectively global or make them global-only.
 - [ ] sphynx-ssh: measure `huff0@hpnssh.org` for downloads (the server compresses, the client decodes) and with the receiver's CPU counted, on a real path as well as the emulated ones, and with other data than the one synthetic log. Also try a larger or smaller block than 128 KiB and `HUF_flags_bmi2` on CPUs that have it; the C decoder is used everywhere.
 - [ ] sphynx: package the licences. The `.deb` has no copyright file, and `sphynx-ssh/huff0/` is zstd code (BSD or GPLv2) that needs its notice shipped with it, as does the rest of the OpenSSH tree (`LICENCE`). Add `usr/share/doc/hpn-ssh/copyright` and check it with `lintian`.
 - [ ] sphynx-ssh: add a daemon-based test of compression to the Linux suite (start `hpnsshd` as the test user, `Compression yes`, check the negotiated method and a checksum of data both ways). Only the C round-trip test and the `-Q compression` check run there now; the daemon test was done by hand on a Mac.
@@ -43,11 +46,6 @@ Items marked `[x]` in the sphynx-ssh review are committed on branch `fix/aes-ctr
 
 - [ ] sphynx-ssh: the non-OpenSSL-3 build does not compile against this system's OpenSSL 3 headers: `cipher-chachapoly-libcrypto-mt.c:575-584` uses OpenSSL 1.1 struct members. That path is meant for OpenSSL 1.1 and LibreSSL, so it needs a test environment with those libraries before it can be checked.
 - [ ] sphynx-ssh: the non-OpenSSL-3 cipher (`cipher-ctr-mt.c`) is compile-checked with zero warnings after the fixes, but it has not been run. Test it against OpenSSL 1.1 or LibreSSL.
-- [ ] sphynx-ssh: each cipher context allocates about 17MB (33 queues of 512KB each, embedded in the context) even though only `numkq` queues are used. Allocate the queues for the thread count, or lower `MAX_THREADS`.
-- [ ] sphynx-ssh: fix the 15 compiler warnings from a default build. Two are in files HPN changes: `scp.c:1798` (`-Wformat-truncation`) and `clientloop.c:2146` (`-Wdiscarded-qualifiers`). The others are in `mux.c:239`, `misc.c:866,1482`, `match.c:283`, `hostfile.c:85,510`, `getopt_long.c:441`, `base64.c:212`, `ssh-keygen.c:341`, and `log.c:402,415,471`.
-- [ ] sphynx-ssh: review the open `XXX` notes in HPN-added code. `sshkey-xmss.c:126` hard-codes `state->k = 2`, and lines 496, 803 and 1108 say a const is wrong, the stack offset is unchecked, and padding is unchecked.
-- [ ] sphynx-ssh: confirm the `strcpy` calls into `buf` in `binn.c:3503,3505` fit the buffer.
-- [ ] sphynx-ssh: a full review of the HPN-only changes is still open. I did not read `scp.c` (+753 lines), `clientloop.c` (+299), `packet.c`, `kex.c`, `channels.c` or `sshconnect.c` in depth.
 
 
 ### sphynx-ssh review, round 2 (HPN-only code outside the cipher fixes)
@@ -66,11 +64,47 @@ HPN-only files (reported):
 
 Not yet reviewed:
 
-- [ ] sphynx-ssh: not read by any reviewer: the OpenSSL 1.1 poly1305 `EVP_PKEY` path in the ChaCha code (`md_ctx` reuse after `DigestSignFinal` looks suspect), the binn library's validation of remote blobs, `servconf.c` `assemble_algorithms`, `Match` block handling of `NoneEnabled`, `cipher-switch.c` use across multiple sessions on one connection, `sshd-auth.c`, and the rest of `sshconnect.c`'s `happy_eyeballs` caller. Read while fixing round 2: `happyeyeballs.c` (now fixed), and the `none` MAC negotiation in `kex.c`; the rest is still unread.
-- [ ] sphynx-ssh: regression tests for the review fixes (0.6.6 to 0.7.9). Each fix has its own test except the none-MAC flags (0.7.3, the asymmetric case cannot be set up from the client options) and the documentation change (0.7.5). Still missing: a malicious-peer test for the metrics reply through a real server (0.6.6 has only the unit test of `metrics_blob_valid()` on bad blobs), and `Ciphers` ordering through `patch_list` end to end. `tests/daemon-checks.sh` is the harness to extend.
+- [ ] sphynx-ssh: one regression test is still missing for the review fixes: a malicious-peer test of the metrics reply through a real server (0.6.6 has only the unit test of `metrics_blob_valid()`; the client needs a server that sends a short or lying reply, which `hpnsshd` will not). Every other fix has its own test, except the ones noted in the CHANGELOG (the none-MAC flags, the `kex` name guard, `tcp_info`). `tests/daemon-checks.sh` is the harness.
 
 ## Done
 
+- [x] sphynx-ssh: keep the fields of the `%C` hash apart (patch 0068, 1.1.9), taken from upstream OpenSSH.
+- [x] sphynx-ssh: `hpnssh -Q addressfamily` (patch 0067, 1.1.8), taken from upstream OpenSSH.
+- [x] sphynx-ssh: stop updating `known_hosts` after the first file fails (patch 0066, 1.1.7), taken from upstream OpenSSH.
+- [x] sphynx-ssh: `ssh -Z` ignores a running control master (patch 0065, 1.1.6), taken from upstream OpenSSH.
+- [x] sphynx-ssh: lowercase the resolver's CNAME before matching `CanonicalizePermittedCNAMEs` (patch 0064, 1.1.5), taken from upstream OpenSSH. No test: it needs a resolver that answers with a mixed-case CNAME.
+- [x] sphynx-ssh: close the client's stderr when a multiplexed session is cancelled (patch 0063, 1.1.4), taken from upstream OpenSSH. The test checks the master survives the cancel; it does not observe the descriptor.
+- [x] sphynx-ssh: forget the `ProxyCommand` once it has been reaped (patch 0062, 1.1.3), taken from upstream OpenSSH. The race has no test; the test checks that a login through a `ProxyCommand` still works.
+- [x] sphynx-ssh: `ConnectTimeout` covers the key exchange (patch 0061, 1.1.2), taken from upstream OpenSSH.
+- [x] sphynx-ssh: `hostfile.c` write and read error checks and tab after a marker (patch 0060, 1.1.1), taken from upstream OpenSSH. Only the tab case has a test: the write path is used by `UpdateHostKeys` and was not driven to a write error.
+- [x] sphynx-ssh: never accept a host key that `known_hosts` marks as revoked, in the port-less, address and `VerifyHostKeyDNS` cases (patch 0059, 1.1.0). The DNS case has no test: it needs a DNSSEC-signed zone.
+- [x] sphynx-ssh: refuse forwarding after a host key that failed verification (`hostkey_untrusted`, patch 0058, 1.0.9), taken from upstream OpenSSH.
+- [x] sphynx-ssh: channel window excess was reset and credited back (1.0.8, patch 0057). Ported from OpenSSH. No test; it needs a peer that overshoots the window.
+- [x] sphynx-ssh: the `scp -Z` source skipped the match byte when `lseek` failed (1.0.7, patch 0056). No test; the seek does not fail on a regular file.
+- [x] sphynx-ssh: the `scp -Z` source hashed by name, not the open file (1.0.6, patch 0055). No test of the race.
+- [x] sphynx-ssh: the `scp -Z` sink could append to a file that changed since it was checked (1.0.5, patch 0054). Test: case 16 in `tests/scp-resume.sh`, which appended before. Only the size is checked.
+- [x] sphynx-ssh: `scp -Z` exited 0 after skipping a file it could not write (1.0.4, patch 0053). Test: case 15 in `tests/scp-resume.sh`, which returned 0 before.
+- [x] sphynx-ssh: the `scp -Z` source read a verdict from the byte after the hash (1.0.3, patch 0052). Test: case 14 in `tests/scp-resume.sh`, which failed before.
+- [x] sphynx-ssh: `scp -Z` threw away the part of the tail that had arrived (1.0.2, patch 0051). Test: case 13 in `tests/scp-resume.sh`, which cuts the connection and failed before. The other low findings in `scp.c` stay in the TODO.
+- [x] sphynx-ssh: the files no reviewer had read (1.0.1). All read except the OpenSSL 1.1 Poly1305 path, which stays with the non-OpenSSL-3 build item.
+- [x] sphynx-ssh: the review of the HPN-only changes (1.0.0). Three read-only agents covered the files; every finding was run before it was fixed or listed. Not proof that nothing is left.
+- [x] sphynx-ssh: two more checks (0.9.9). The review report that `FallbackPort` loses the `ConnectTimeout` does not reproduce; a check keeps it so. The `patch_list` ordering is checked on the real proposal.
+- [x] sphynx-ssh: a shared session could have a terminal over the none cipher (0.9.8, patch 0050). Test: the refusal message in `tests/daemon-checks.sh`, which was missing before.
+- [x] sphynx-ssh: `scp -Z` lost the protocol when the sink could not open the target (0.9.7, patch 0049). Test: case 12 in `tests/scp-resume.sh`, where the next file was lost before.
+- [x] sphynx-ssh: `scp -Z` to `/dev/null` or a fifo tried to resume it (0.9.6, patch 0048). Test: case 11 in `tests/scp-resume.sh`, which failed before.
+- [x] sphynx-ssh: the `scp -Z` sink ignored a failed read of the match byte (0.9.5, patch 0047). Test: case 10 in `tests/scp-resume.sh`, which left a temporary file before.
+- [x] sphynx-ssh: a possible double free on an unreachable error path in `kex_choose_conf()` (0.9.4, patch 0046). A guard; no test.
+- [x] sphynx-ssh: uninitialised `tcp_info` in the metrics paths (0.9.3, patch 0045). No test (needs a kernel with a shorter `tcp_info`); the metrics checks still pass.
+- [x] sphynx-ssh: prompts in the client loop ran with signals blocked (0.9.2, patch 0044). Test: the askpass mask check in `tests/daemon-checks.sh`, which failed before (`4007`). No test of Ctrl-C itself.
+- [x] sphynx-ssh: `hpnsshd -T` left out `DisableMTAES` (0.9.1, patch 0043). Test: `tests/daemon-checks.sh`, which failed before.
+- [x] sphynx-ssh: the `TCPKeepAlive` table had no terminator (0.9.0, patch 0042). Test: `tests/daemon-checks.sh`, which failed on `TCPKeepAlive no-pq-kex`.
+- [x] sphynx-ssh: `Match ... NoneEnabled no` did not stop the switch to the none cipher (0.8.9, patch 0041). Test: a second daemon with a `Match` block in `tests/daemon-checks.sh`, which failed before. Not covered: `Match` turning `NoneEnabled` on under a global `no`, which still does nothing.
+- [x] sphynx-ssh: the second session on an `aes-ctr` connection hung (0.8.8, patch 0040). The forked session child waited for cipher threads it did not have. Tests: `tests/c/aes_ctr_mt_fork.c` (hung before) and three multiplexed sessions in `tests/daemon-checks.sh`. The `cipher-ctr-mt.c` copy of the change is untested.
+- [x] sphynx-ssh: each session on a connection asked for another rekey (0.8.7, patch 0039). Three multiplexed sessions started five key exchanges and now start three (the first, and a switch from each end). Test: the key exchange count in `tests/daemon-checks.sh`.
+- [x] sphynx-ssh: the compiler warnings (0.8.6). 13 now, all in OpenSSH's own lines (gcc 15 diagnostics), so left alone to keep the diff to upstream small. Listed in the CHANGELOG entry.
+- [x] sphynx-ssh: the `XXX` notes in `sshkey-xmss.c` (0.8.5). OpenSSH's own, not HPN's, and in code that is not built. No change.
+- [x] sphynx-ssh: checked the `strcpy` calls in `binn.c` (0.8.4). They copy `"true"` or `"false"` into a 128 byte buffer, so they fit. No change.
+- [x] sphynx-ssh: the 17 MB per cipher context (0.8.3, patch 0038). It is virtual memory, because the context is `calloc()`ed and a connection touches 2 queues of 33; the one real cost was clearing all of it on free, which is fixed. Not done: allocating the queues for the thread count, which is not worth changing the structure for. No test of the saving.
 - [x] sphynx-ssh: a failed connect with `HappyEyes yes` printed no port (0.8.2, patch 0037). Test: the message check in `tests/run-tests.sh`, which failed before.
 - [x] sphynx-ssh: automated the AddressSanitizer check of the `scp` to `hpnscp` use after free (0.8.1). `tests/daemon-checks.sh` builds `clientloop.c` with the sanitizer, starts a control master and checks it survives a session that starts with `scp`. Checked against the pre-fix `clientloop.c` by hand: the master died. The test needs `openbsd-compat/base64.o` on the link line so the sanitizer's libc does not supply a `__b64_pton` that crashes.
 - [x] sphynx-ssh: tested the `scp -Z` concat error paths (0.8.0). A sink with a low file size limit fails the append, and the existing file is restored with no temporary file left. Tests: cases 8 and 9 in `tests/scp-resume.sh`. No code change; the error message itself is not checked, because the sink reports it on the protocol stream, which the harness does not capture.
