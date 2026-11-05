@@ -1,8 +1,8 @@
-From 463e256ccb6d59cecedcd5d8f8347dd1075d7046 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] kex: insert the serial chacha name after the MT entry in
- patch_list
+Subject: [PATCH 08/55] kex: insert the serial chacha name after the MT entry
+ in patch_list
 
 patch_list() adds chacha20-poly1305@openssh.com after
 chacha20-poly1305-mt@hpnssh.org when the list names only the second. It took
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  1 file changed, 28 insertions(+), 27 deletions(-)
 
 diff --git a/kex.c b/kex.c
-index 517717280..83b628a47 100644
+index 2f4ded2c5..746163c53 100644
 --- a/kex.c
 +++ b/kex.c
 @@ -812,39 +812,40 @@ kex_free(struct kex *kex)
@@ -93,3 +93,5 @@ index 517717280..83b628a47 100644
  	return adj;
  }
  
+-- 
+2.50.0

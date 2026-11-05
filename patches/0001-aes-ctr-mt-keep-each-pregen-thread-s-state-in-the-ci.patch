@@ -1,8 +1,8 @@
-From 55d7d3d68ee2bbccae03a3720bd56883e5c36e63 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:18 +1100
-Subject: [PATCH] aes-ctr-mt: keep each pregen thread's state in the cipher
- context
+Subject: [PATCH 01/55] aes-ctr-mt: keep each pregen thread's state in the
+ cipher context
 
 The OpenSSL 3 multithreaded AES-CTR cipher kept the keystream EVP context of
 each pregen thread in a global uthash table (evp_ptrs), and the thread and
@@ -643,3 +643,5 @@ index 965d04851..50eb90b42 100644
  int aes_mt_do_cipher(void *, u_char *, size_t *, size_t, const u_char *, size_t);
  int aes_mt_start_threads(void *, const u_char *, size_t, const u_char *, size_t, const OSSL_PARAM *);
  void aes_mt_freectx(void *);
+-- 
+2.50.0

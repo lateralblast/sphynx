@@ -1,7 +1,7 @@
-From 291f9ce0345cdbbfd98315a5e45ec8f20faa381c Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] aes-ctr-mt: destroy the thread attributes after use
+Subject: [PATCH 05/55] aes-ctr-mt: destroy the thread attributes after use
 
 pthread_attr_init() was never paired with pthread_attr_destroy(), in either
 implementation. Destroy the attributes once the threads have been created.
@@ -38,3 +38,5 @@ index 4e56d26b4..75abb54fb 100644
  
  		pthread_mutex_lock(&c->q[0].lock);
  		// wait for all of the threads to be initialized
+-- 
+2.50.0

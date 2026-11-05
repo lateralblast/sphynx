@@ -4,6 +4,31 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-05
+
+### Fixed
+
+- With a base that has OpenSSH's newer timeout handling, the retry on `FallbackPort` after a timed-out connect to the default port waited for ever; it now gets a full `ConnectTimeout` (patch 0069).
+
+## [1.2.2] - 2026-11-05
+
+### Changed
+
+- `sphynx-ssh/` is now OpenSSH master (2026-11-05, 155 commits past 10.6) with HPN-SSH 18.12.0 merged into it, not HPN-SSH alone. The series in `patches/` applies to the OpenSSH commit in `patches/BASE`, and the new patch 0000 adds HPN-SSH. This brings in the fixes that the HPN-SSH base lacked (all of 0057 to 0068, which are dropped from the series, and the ones not looked at yet). Patch 0042 is dropped too, as upstream has it. The merge had 9 trivial conflicts; all other patches apply, with two context lines changed in 0022. `tools/patches.sh check` now compares against a temporary index at the base, so a file that is untracked in `sphynx-ssh/` but the same as the base is not counted as a change.
+- `tools/patches.sh` tells you the command to fetch the base commit into `sphynx-ssh/` when it is missing.
+
+## [1.2.1] - 2026-11-05
+
+### Changed
+
+- The CPU-placement investigation is closed: pinning the cipher threads to separate cores made no difference on the x86-64 server, so nothing is added to the package or the tuning script. The measurements are in `RESEARCH.md`.
+
+## [1.2.0] - 2026-11-05
+
+### Changed
+
+- The build-flags investigation is closed: `-O3` and `-O2 -flto` were within 2 percent of the default `-O2` hardened build on the x86-64 server, and nothing is gained, so the build is unchanged. The measurements are in `RESEARCH.md`.
+
 ## [1.1.9] - 2026-11-05
 
 ### Fixed

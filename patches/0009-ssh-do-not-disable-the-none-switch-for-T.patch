@@ -1,7 +1,7 @@
-From fa2efe579d29479325e12cf39ac5f1082fc0e8a5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] ssh: do not disable the none switch for -T
+Subject: [PATCH 09/55] ssh: do not disable the none switch for -T
 
 The none cipher is only allowed on sessions without a tty, and the comment
 says -T was meant to stop it on an interactive session. But -T asks for no
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  1 file changed, 7 insertions(+), 4 deletions(-)
 
 diff --git a/ssh.c b/ssh.c
-index a63712aa1..66bc709a9 100644
+index 06cddbed6..ae842cecc 100644
 --- a/ssh.c
 +++ b/ssh.c
-@@ -878,6 +878,13 @@ main(int ac, char **av)
+@@ -892,6 +892,13 @@ main(int ac, char **av)
  				options.request_tty = REQUEST_TTY_FORCE;
  			else
  				options.request_tty = REQUEST_TTY_YES;
@@ -33,7 +33,7 @@ index a63712aa1..66bc709a9 100644
  			break;
  		case 'v':
  			if (debug_flag == 0) {
-@@ -1036,10 +1043,6 @@ main(int ac, char **av)
+@@ -1050,10 +1057,6 @@ main(int ac, char **av)
  			break;
  		case 'T':
  			options.request_tty = REQUEST_TTY_NO;
@@ -44,3 +44,5 @@ index a63712aa1..66bc709a9 100644
  			break;
  		case 'o':
  			line = xstrdup(optarg);
+-- 
+2.50.0

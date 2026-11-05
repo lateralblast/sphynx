@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Wed, 4 Nov 2026 19:30:00 +1100
-Subject: [PATCH] channels: do not zero the extended data buffer on every pass
+Subject: [PATCH 21/55] channels: do not zero the extended data buffer on every
+ pass
 
 channel_handle_efd_read() declared its 32 KiB read buffer at the top of the
 function and returned early, before using it, whenever the extended data fd
@@ -26,10 +27,10 @@ aes256-ctr (1.2 percent, probably within the noise).
  1 file changed, 8 insertions(+), 1 deletion(-)
 
 diff --git a/channels.c b/channels.c
-index 4000fa803..f19390cec 100644
+index 61df54fe3..4e653e12f 100644
 --- a/channels.c
 +++ b/channels.c
-@@ -2543,7 +2543,6 @@ channel_handle_efd_write(struct ssh *ssh, Channel *c)
+@@ -2575,7 +2575,6 @@ channel_handle_efd_write(struct ssh *ssh, Channel *c)
  static int
  channel_handle_efd_read(struct ssh *ssh, Channel *c)
  {
@@ -37,7 +38,7 @@ index 4000fa803..f19390cec 100644
  	ssize_t len;
  	int r, force;
  
-@@ -2552,6 +2551,14 @@ channel_handle_efd_read(struct ssh *ssh, Channel *c)
+@@ -2584,6 +2583,14 @@ channel_handle_efd_read(struct ssh *ssh, Channel *c)
  	if (!force && (c->io_ready & SSH_CHAN_IO_EFD_R) == 0)
  		return 1;
  

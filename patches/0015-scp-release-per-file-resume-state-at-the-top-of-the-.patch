@@ -1,7 +1,8 @@
-From a892c2cc1bed2ee7a910c053d8194a91c27d7cca Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] scp: release per-file resume state at the top of the loop
+Subject: [PATCH 15/55] scp: release per-file resume state at the top of the
+ loop
 
 np_tmp was freed only at the end of the loop body, so an early continue or an
 error left a stale temporary name for the next file to reuse or overwrite.
@@ -80,3 +81,5 @@ index 16902afd8..43a7cd68e 100644
  	for (n = 0; n < npatterns; n++)
  		free(patterns[n]);
  	free(patterns);
+-- 
+2.50.0

@@ -1,7 +1,7 @@
-From da399122d8bf0a8979fe45f43b7d123bb86855ca Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] chachapoly-mt: check the worker argument allocation
+Subject: [PATCH 04/55] chachapoly-mt: check the worker argument allocation
 
 The manager thread allocated the array of worker arguments with malloc() and
 dereferenced it without checking the result. Report the failure through the
@@ -30,3 +30,5 @@ index 1c545b3c8..b91ddb37d 100644
  	for (ti = 0; ti < NUMTHREADS; ti++) {
  		wargs[ti].batchID = batchID;
  		wargs[ti].batch = batch;
+-- 
+2.50.0

@@ -1,8 +1,8 @@
-From b44381f44a6a066dd0408585a388fbac9f08c387 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] clientloop: edit the command buffer in place when rewriting
- scp
+Subject: [PATCH 07/55] clientloop: edit the command buffer in place when
+ rewriting scp
 
 When the server has the hpn prefix, client_session2_setup() rewrites a
 command that starts with "scp" to "hpnscp". It did that with
@@ -24,10 +24,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  1 file changed, 23 insertions(+), 27 deletions(-)
 
 diff --git a/clientloop.c b/clientloop.c
-index e7b838b43..c43649b6a 100644
+index 50d6e08ad..aa9661d2c 100644
 --- a/clientloop.c
 +++ b/clientloop.c
-@@ -2993,37 +2993,33 @@ client_session2_setup(struct ssh *ssh, int id, int want_tty, int want_subsystem,
+@@ -3008,37 +3008,33 @@ client_session2_setup(struct ssh *ssh, int id, int want_tty, int want_subsystem,
  		 * scp commands to look for hpnscp instead.
  		 */
  		if (ssh->compat & SSH_HPNSSH_PREFIX) {
@@ -88,3 +88,5 @@ index e7b838b43..c43649b6a 100644
  		}
  		if ((cmdstring = sshbuf_dup_string(cmd)) == NULL)
  			fatal_f("sshbuf_dup_string failed");
+-- 
+2.50.0

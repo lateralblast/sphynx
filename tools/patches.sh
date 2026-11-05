@@ -26,7 +26,7 @@ cmd_check() {
     local src="${1:-$ROOT/sphynx-ssh}" tmp want got f
     [ -e "$src/.git" ] || die "$src is not a git checkout"
     git -C "$src" cat-file -e "$BASE^{commit}" 2>/dev/null \
-        || die "$src does not have the upstream commit $BASE (git fetch the upstream remote)"
+        || die "$src does not have the upstream commit $BASE (git -C $src fetch <openssh-portable> $BASE)"
     tmp="$(mktemp -d)"
     # expand the path now: tmp is local, and gone when the trap runs
     # shellcheck disable=SC2064
@@ -37,8 +37,14 @@ cmd_check() {
 
     # the result must be the same files as sphynx-ssh's working tree
     # files not committed yet count too, since a new file is untracked until it is
-    want="$({ git -C "$src" diff --name-only "$BASE"; git -C "$src" ls-files --others --exclude-standard; } | sort -u)"
     got="$(git -C "$tmp/t" diff --name-only "$BASE" HEAD | sort)"
+    # a temporary index at BASE, so that a file sphynx-ssh's own index lacks but BASE has, unchanged, is not listed;
+    # files the series makes that .gitignore hides (aclocal.m4) are added by name
+    want="$(printf '%s\n' "$got" | GIT_INDEX_FILE="$tmp/index" bash -c '
+        src=$1 base=$2
+        git -C "$src" read-tree "$base" && git -C "$src" add -A .
+        while IFS= read -r f; do [ -e "$src/$f" ] && git -C "$src" add -f -- "$f"; done
+        git -C "$src" diff --cached --name-only "$base"' _ "$src" "$BASE" | sort -u)"
     [ "$want" = "$got" ] || die "the series and $src change different files:
 $(diff <(echo "$want") <(echo "$got") || true)"
     while IFS= read -r f; do

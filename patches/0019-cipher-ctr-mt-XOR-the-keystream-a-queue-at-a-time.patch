@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Wed, 4 Nov 2026 12:00:00 +1100
-Subject: [PATCH] cipher-ctr-mt: XOR the keystream a queue at a time
+Subject: [PATCH 19/55] cipher-ctr-mt: XOR the keystream a queue at a time
 
 aes_mt_do_cipher() XORed the keystream into the data one 16 byte block per
 loop pass, testing the alignment of three pointers and taking a modulo on
@@ -18,7 +18,7 @@ MB/s, Linux x86-64 519 to 541 MB/s).
 tests/c/aes_ctr_mt_crypt.c compares the output with OpenSSL's AES-256-CTR for
 chunks of assorted sizes across several queue switches.
 ---
- cipher-ctr-mt-functions.c | 117 ++++++++++++++++------------------------------
+ cipher-ctr-mt-functions.c | 117 +++++++++++++-------------------------
  1 file changed, 40 insertions(+), 77 deletions(-)
 
 diff --git a/cipher-ctr-mt-functions.c b/cipher-ctr-mt-functions.c

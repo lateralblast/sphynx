@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Wed, 4 Nov 2026 18:30:00 +1100
-Subject: [PATCH] cipher-ctr-mt-provider: read the cipher state through the
- EVP_CIPHER_CTX
+Subject: [PATCH 20/55] cipher-ctr-mt-provider: read the cipher state through
+ the EVP_CIPHER_CTX
 
 The multithreaded AES-CTR provider hands libcrypto an EVP_CIPHER_CTX as its
 context and keeps its real state (struct aes_mt_ctx_st) as that context's app

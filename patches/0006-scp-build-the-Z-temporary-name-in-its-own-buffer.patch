@@ -1,7 +1,7 @@
-From 2a0d858ffdf2118883d217311c910a70ecddec77 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] scp: build the -Z temporary name in its own buffer
+Subject: [PATCH 06/55] scp: build the -Z temporary name in its own buffer
 
 In -Z resume mode the data is received into a temporary file whose name was
 made by strcat()ing a random string onto np. When the destination is a plain
@@ -90,3 +90,5 @@ index 51c53bbc0..9da45a607 100644
  		*dest++ = charset[index];
  	}
  	*dest = '\0';
+-- 
+2.50.0

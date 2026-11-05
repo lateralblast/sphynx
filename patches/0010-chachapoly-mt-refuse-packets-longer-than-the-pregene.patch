@@ -1,8 +1,8 @@
-From 828b65bc8b03ffc43bf378b62825f272ade75b4a Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] chachapoly-mt: refuse packets longer than the pregenerated
- keystream
+Subject: [PATCH 10/55] chachapoly-mt: refuse packets longer than the
+ pregenerated keystream
 
 The keystream for a packet is pregenerated: headerStream holds
 CHACHA_BLOCKLEN bytes and mainStream holds KEYSTREAMLEN bytes (about 32KB).
@@ -44,3 +44,5 @@ index b91ddb37d..bbe1d7c48 100644
  #ifdef SAFETY
  	if (ctx_mt->mainpid != getpid()) { /* we're a fork */
  		/*
+-- 
+2.50.0

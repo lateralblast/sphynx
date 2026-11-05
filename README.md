@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 1.1.9
+Version: 1.2.3
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -748,16 +748,19 @@ The two ciphers it compares come in both orders in the output:
 
 `sphynx-ssh/` is upstream HPN-SSH plus the changes sphynx has made to it. Those changes are kept as a series of patches in `patches/`, one per change, so they can be reviewed one at a time, sent upstream, and applied again to a newer HPN-SSH release.
 
-The series applies to this upstream commit, which is also in `patches/BASE`:
+The series applies to this commit of OpenSSH, which is also in `patches/BASE`:
 
 ```
-2c7cc5554  rapier1/hpn-ssh master, HPN-SSH 18.12.0 on OpenSSH 10.6
+3c6ec4c63  openssh/openssh-portable master, 2026-11-05 (OpenSSH 10.6 and the commits after it)
 ```
+
+Patch 0000 adds HPN-SSH 18.12.0 (rapier1/hpn-ssh `2c7cc5554`) to it. It is the result of merging HPN-SSH into OpenSSH master, so `sphynx-ssh/` has OpenSSH's newest fixes as well as HPN-SSH's performance work; HPN-SSH is only released for OpenSSH's major versions. The patches after it are sphynx's own changes.
 
 Apply the patches in order. Each one builds on its own, and each message says what was wrong, how it fails, and how it was checked.
 
 | Patch | Change | sphynx versions | For upstream |
 |---|---|---|---|
+| 0000 | `hpn-ssh`: HPN-SSH 18.12.0 merged into OpenSSH master, as one patch (the multithreaded ciphers, `scp -Z`, metrics, the dynamic window, HappyEyes and the rest of HPN-SSH, on top of the OpenSSH commits made since 10.6). | 1.2.2 | no, it is HPN-SSH |
 | 0001 | `aes-ctr-mt`: keep each pregen thread's state in the cipher context. Removes a data race on a shared hash, a hash key that used 4 bytes of an 8-byte thread id, a NULL dereference on join, global thread and queue counts, a pointer to the caller's key, unchecked allocations, and an `exit` from a thread. | 0.0.4, 0.0.5, 0.0.6, 0.0.8, 0.0.9, 0.1.0 | yes |
 | 0002 | `aes-ctr-mt`: the same changes in the implementation for builds without OpenSSL 3. | 0.0.4 to 0.1.0, as 0001 | yes |
 | 0003 | `aes-ctr-mt`: destroy the queue locks after the threads are joined. | 0.0.7 | yes |
@@ -799,7 +802,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0039 | `cipher-switch`: switch to the multithreaded cipher once per connection. | 0.8.7 | yes |
 | 0040 | `cipher-ctr-mt`: do not cancel or join pregeneration threads in a forked child. | 0.8.8 | yes |
 | 0041 | `sshd-session`: drop `none` from the proposal where a `Match` block turns it off. | 0.8.9 | yes |
-| 0042 | `servconf`: end the `TCPKeepAlive` table with a NULL entry. | 0.9.0 | yes |
+| 0042 | `servconf`: end the `TCPKeepAlive` table with a NULL entry. | 0.9.0 | dropped in 1.2.2, it is in OpenSSH now |
 | 0043 | `servconf`: print `DisableMTAES` in `sshd -T`. | 0.9.1 | yes |
 | 0044 | `clientloop`, `mux`: give prompts and their askpass the signals the loop blocks. | 0.9.2 | yes |
 | 0045 | `clientloop`, `serverloop`: clear `tcp_info` before the kernel fills it, and use a `socklen_t`. | 0.9.3 | yes |
@@ -814,18 +817,21 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0054 | `scp`: do not append a resumed tail to a file that changed in the meantime. | 1.0.5 | yes |
 | 0055 | `scp`: hash the descriptor the source sends from, not the name. | 1.0.6 | yes |
 | 0056 | `scp`: answer with a match status when the `-Z` source cannot seek. | 1.0.7 | yes |
-| 0057 | `channels`: forgive window excess as it drains, as OpenSSH does. | 1.0.8 | yes |
-| 0058 | sshconnect: refuse forwarding after a host key that failed verification (`hostkey_untrusted`) | 1.0.9 | yes |
-| 0059 | sshconnect: never accept a host key that known_hosts marks as revoked (port-less, address and DNS cases) | 1.1.0 | yes |
-| 0060 | hostfile: check for write and read errors, and find the end of a marker | 1.1.1 | yes |
-| 0061 | sshconnect: let ConnectTimeout cover the key exchange | 1.1.2 | yes |
-| 0062 | ssh: forget the ProxyCommand once it has been reaped | 1.1.3 | yes |
-| 0063 | mux: close the client stderr when a session is cancelled | 1.1.4 | yes |
-| 0064 | ssh: lowercase the resolver CNAME before matching CanonicalizePermittedCNAMEs | 1.1.5 | yes |
-| 0065 | ssh: do not use a control master for -Z | 1.1.6 | yes |
-| 0066 | clientloop: stop updating known_hosts after the first file fails | 1.1.7 | yes |
-| 0067 | ssh: add -Q addressfamily | 1.1.8 | yes |
-| 0068 | readconf: keep the fields of the %C hash apart | 1.1.9 | yes |
+| 0057 | `channels`: forgive window excess as it drains, as OpenSSH does. | 1.0.8 | dropped in 1.2.2, it is in OpenSSH now |
+| 0058 | sshconnect: refuse forwarding after a host key that failed verification (`hostkey_untrusted`) | 1.0.9 | dropped in 1.2.2, it is in OpenSSH now |
+| 0059 | sshconnect: never accept a host key that known_hosts marks as revoked (port-less, address and DNS cases) | 1.1.0 | dropped in 1.2.2, it is in OpenSSH now |
+| 0060 | hostfile: check for write and read errors, and find the end of a marker | 1.1.1 | dropped in 1.2.2, it is in OpenSSH now |
+| 0061 | sshconnect: let ConnectTimeout cover the key exchange | 1.1.2 | dropped in 1.2.2, it is in OpenSSH now |
+| 0062 | ssh: forget the ProxyCommand once it has been reaped | 1.1.3 | dropped in 1.2.2, it is in OpenSSH now |
+| 0063 | mux: close the client stderr when a session is cancelled | 1.1.4 | dropped in 1.2.2, it is in OpenSSH now |
+| 0064 | ssh: lowercase the resolver CNAME before matching CanonicalizePermittedCNAMEs | 1.1.5 | dropped in 1.2.2, it is in OpenSSH now |
+| 0065 | ssh: do not use a control master for -Z | 1.1.6 | dropped in 1.2.2, it is in OpenSSH now |
+| 0066 | clientloop: stop updating known_hosts after the first file fails | 1.1.7 | dropped in 1.2.2, it is in OpenSSH now |
+| 0067 | ssh: add -Q addressfamily | 1.1.8 | dropped in 1.2.2, it is in OpenSSH now |
+| 0068 | readconf: keep the fields of the %C hash apart | 1.1.9 | dropped in 1.2.2, it is in OpenSSH now |
+| 0069 | ssh: give the FallbackPort attempt a full ConnectTimeout | 1.2.3 | yes |
+
+Patches 0042 and 0057 to 0068 are no longer in the series: OpenSSH master has those fixes now, so they are in patch 0000's base. The `TCPKeepAlive` table (0042), the channel window excess (0057) and ten more that were taken from OpenSSH one at a time (0058 to 0068) are listed above for the record, and their `CHANGELOG.md` entries stay.
 
 Some changelog entries share a patch. The AES-CTR cipher fixes were written as one restructure: removing the shared hash is what fixes the race, the key size and the NULL dereference at once, and moving the counts into the context is entangled with the same functions. Those changes cannot be split into steps that each build, so they are patches 0001 and 0002. The two small independent ones, 0003 and 0005, are separate.
 
@@ -839,22 +845,24 @@ tools/patches.sh base               # print the upstream commit the series appli
 
 `apply` uses `git am --3way`, so a patch that no longer applies cleanly falls back to a three-way merge.
 
-To move to a newer HPN-SSH release:
+To take newer OpenSSH commits or a newer HPN-SSH, merge them in a scratch clone of `openssh-portable` and make patch 0000 again, then put the other patches back on top. Nothing is committed in `sphynx-ssh/` or `openssh-portable/` by this:
 
 ```sh
-cd sphynx-ssh
-git fetch upstream --tags
-git checkout -b next <new upstream commit or tag>
-../tools/patches.sh apply .
+git clone openssh-portable /tmp/merge && cd /tmp/merge
+git remote add hpn <rapier1/hpn-ssh, or the sphynx-ssh checkout> && git fetch hpn
+git checkout -b m <the OpenSSH commit to use as the base>
+git merge hpn/<new HPN-SSH commit>        # resolve the conflicts: expect manual page headers and renames
+git commit
+# patch 0000: the merge's tree as one commit on the OpenSSH commit
+c=$(git commit-tree m^{tree} -p <the OpenSSH commit> -m "hpn-ssh: HPN-SSH <version> merged into OpenSSH master")
+git format-patch -1 --start-number 0 --no-signature -o ../patches "$c"
+# the rest of the series, on the merge
+git am --3way $(ls ../patches/*.patch | grep -v /0000-)
 ```
 
-If a patch does not apply, fix the conflict in the tree, `git add` the files and run `git am --continue`. If an upstream release has already fixed what a patch fixes, run `git am --skip` for it and say so in `CHANGELOG.md`. Then build, run the tests, and write the series out again:
+A patch that fails with "does not apply" and no conflict may be one that OpenSSH or HPN-SSH has since made; check, drop it, and say so in `CHANGELOG.md`. Write the series out again with `git format-patch`, keeping the numbers the patches have, and put the OpenSSH commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, so regenerate it, and the series, whenever the sphynx version changes.
 
-```sh
-git format-patch -N --no-signature -o ../patches <new upstream commit>..HEAD
-```
-
-Put the new commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, so regenerate it, and the series, whenever the sphynx version changes.
+`tools/patches.sh check` needs the OpenSSH commit in `sphynx-ssh/`'s own repository: `git -C sphynx-ssh fetch ../openssh-portable <commit>`.
 
 ### Sending a patch upstream
 
@@ -862,7 +870,9 @@ Patches 0001 to 0016 are self-contained bug fixes. Take the ones you want, in or
 
 ### How the series was made
 
-The fixes were first made as edits to `sphynx-ssh/`. The series was then rebuilt on the upstream commit, one fix at a time, and `tools/patches.sh check` confirms that its end state is exactly the current `sphynx-ssh/`. The `sphynx build` command still builds from `sphynx-ssh/` and does not apply the patches itself.
+The fixes were first made as edits to `sphynx-ssh/`. The series was then built on the upstream commit, one fix at a time, and `tools/patches.sh check` confirms that its end state is exactly the current `sphynx-ssh/`. The `sphynx build` command still builds from `sphynx-ssh/` and does not apply the patches itself.
+
+Until 1.2.1 the series applied to HPN-SSH 18.12.0, and the OpenSSH fixes made after it were taken one at a time (patches 0057 to 0068). From 1.2.2 it applies to OpenSSH master, with HPN-SSH as patch 0000, so those fixes, and the ones nobody had looked at yet, come with the base.
 
 ## Build dependencies
 
@@ -914,7 +924,7 @@ CHANGELOG.md                every change, by version
 TODO.md                     outstanding work
 RESEARCH.md                 ideas tried or considered and not built, with the results
 HANDOFF.md                  current state and next steps, for picking the work up elsewhere
-patches/                    the changes sphynx makes to HPN-SSH, one patch each, applied to the commit in patches/BASE
+patches/                    HPN-SSH (patch 0000) and the changes sphynx makes to it, one patch each, applied to the OpenSSH commit in patches/BASE
 sphynx-ssh/                HPN-SSH fork used as the source (separate git repo, not tracked by sphynx)
 hpn-ssh/                    HPN-SSH clone (separate git repo, not used by default)
 openssh-portable/           upstream OpenSSH source (separate git repo, not tracked by sphynx)

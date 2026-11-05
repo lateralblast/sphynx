@@ -1,7 +1,7 @@
-From bb7eb2ff6846a0b1ade538f67863ef483a28d168 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] scp: report errors when joining the resumed tail
+Subject: [PATCH 12/55] scp: report errors when joining the resumed tail
 
 After a resumed transfer the received tail is appended to the existing file.
 A failed fopen(), fstat(), fwrite() or fclose() jumped to the cleanup, which
@@ -152,3 +152,5 @@ index 3e5660aec..3aa287dfa 100644
  		(void) response();
  		if (showprogress)
  			stop_progress_meter();
+-- 
+2.50.0

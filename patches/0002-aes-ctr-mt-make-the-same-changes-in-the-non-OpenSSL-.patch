@@ -1,7 +1,7 @@
-From 0c30b92a50983a5c3c6a0452593af813b681a5db Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] aes-ctr-mt: make the same changes in the non-OpenSSL 3
+Subject: [PATCH 02/55] aes-ctr-mt: make the same changes in the non-OpenSSL 3
  implementation
 
 cipher-ctr-mt.c is the multithreaded AES-CTR cipher for builds without
@@ -490,3 +490,5 @@ index 483493043..9b524e296 100644
  		free(c);
  		EVP_CIPHER_CTX_set_app_data(ctx, NULL);
  	}
+-- 
+2.50.0

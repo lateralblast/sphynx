@@ -1,7 +1,7 @@
-From 1374dfbdc85ea6e56bd918ffb571a0791c81bf38 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] channels: arm the input fd only when it can be read
+Subject: [PATCH 16/55] channels: arm the input fd only when it can be read
 
 The client and server could spin at full CPU during bulk transfers. Reading a
 channel's input is armed in channel_pre_open() with sshbuf_check_reserve(),
@@ -30,10 +30,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  1 file changed, 20 insertions(+), 2 deletions(-)
 
 diff --git a/channels.c b/channels.c
-index 7d8ed3b08..4000fa803 100644
+index f59efcd9a..61df54fe3 100644
 --- a/channels.c
 +++ b/channels.c
-@@ -1428,6 +1428,24 @@ channel_tcpwinsz(struct ssh *ssh)
+@@ -1457,6 +1457,24 @@ channel_tcpwinsz(struct ssh *ssh)
  	return (tcpwinsz);
  }
  
@@ -58,7 +58,7 @@ index 7d8ed3b08..4000fa803 100644
  static void
  channel_pre_open(struct ssh *ssh, Channel *c)
  {
-@@ -1435,7 +1453,7 @@ channel_pre_open(struct ssh *ssh, Channel *c)
+@@ -1464,7 +1482,7 @@ channel_pre_open(struct ssh *ssh, Channel *c)
  	if (c->istate == CHAN_INPUT_OPEN &&
  	    c->remote_window > 0 &&
  	    sshbuf_len(c->input) < c->remote_window &&
@@ -67,7 +67,7 @@ index 7d8ed3b08..4000fa803 100644
  		c->io_want |= SSH_CHAN_IO_RFD;
  	if (c->ostate == CHAN_OUTPUT_OPEN ||
  	    c->ostate == CHAN_OUTPUT_WAIT_DRAIN) {
-@@ -1597,7 +1615,7 @@ channel_pre_mux_client(struct ssh *ssh, Channel *c)
+@@ -1626,7 +1644,7 @@ channel_pre_mux_client(struct ssh *ssh, Channel *c)
  {
  	c->io_want = 0;
  	if (c->istate == CHAN_INPUT_OPEN && !c->mux_pause &&
@@ -76,3 +76,5 @@ index 7d8ed3b08..4000fa803 100644
  		c->io_want |= SSH_CHAN_IO_RFD;
  	if (c->istate == CHAN_INPUT_WAIT_DRAIN) {
  		/* clear buffer immediately (discard any partial packet) */
+-- 
+2.50.0

@@ -1,8 +1,8 @@
-From 83023c8d9eac930c6512f6fc958aa1cad595421b Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH] scp: check the hash field length and make calculate_hash
- fixed width
+Subject: [PATCH 14/55] scp: check the hash field length and make
+ calculate_hash fixed width
 
 The sink copied exactly 128 bytes of hash out of the record without checking
 that the line was that long, reading past the end into stale buffer contents
@@ -166,3 +166,5 @@ index ac6f5bb62..16902afd8 100644
  				SCREWUP("hash not delimited");
  		}
  #ifdef DEBUG
+-- 
+2.50.0
