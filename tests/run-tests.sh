@@ -239,11 +239,17 @@ deb="${debs[0]}"
 [ "$(dpkg-deb -f "$deb" Package)" = "hpn-ssh" ] || fail "package name is not hpn-ssh"
 pass "package is named hpn-ssh"
 
+# the OpenSSH, snapshot and HPN-SSH parts come from the tree's version.h, read here with its own sed
+hdr=sphynx-ssh/version.h
+ossh="$(sed -n 's/^#define SSH_VERSION[[:space:]]*"OpenSSH_\([^"]*\)".*/\1/p' "$hdr")$(sed -n 's/^#define SSH_PORTABLE[[:space:]]*"\([^"]*\)".*/\1/p' "$hdr")"
+snap="$(sed -n 's/^#define SSH_SNAPSHOT[[:space:]]*"_snapshot\([^"]*\)".*/\1/p' "$hdr")"
+hpnv="$(sed -n 's/^#define SSH_HPN[[:space:]]*"_hpn\([^"]*\)".*/\1/p' "$hdr")"
+[ -n "$ossh" ] && [ -n "$snap" ] && [ -n "$hpnv" ] || fail "could not read the OpenSSH, snapshot and HPN-SSH versions from $hdr"
 # shellcheck source=/dev/null
 codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
 version="$(dpkg-deb -f "$deb" Version)"
 case "$version" in
-    10.6p1+hpn18.12.0+sphynx"$script_version"-1~"$codename"1) pass "version $version follows the upstream, sphynx and series scheme" ;;
+    "$ossh"+snapshot"$snap"+hpn"$hpnv"+sphynx"$script_version"-1~"$codename"1) pass "version $version follows the upstream, sphynx and series scheme" ;;
     *) fail "unexpected package version: $version" ;;
 esac
 
@@ -264,7 +270,7 @@ extract="$TEST_DIR/extract"
 dpkg-deb -x "$deb" "$extract"
 banner="$("$extract/usr/bin/hpnssh" -V 2>&1 || true)"
 case "$banner" in
-    *"OpenSSH_10.6p1_hpn18.12.0_sphynx$script_version"*) pass "hpnssh -V reports OpenSSH_10.6p1_hpn18.12.0_sphynx$script_version" ;;
+    *"OpenSSH_${ossh}_snapshot${snap}_hpn${hpnv}_sphynx$script_version"*) pass "hpnssh -V reports OpenSSH_${ossh}_snapshot${snap}_hpn${hpnv}_sphynx$script_version" ;;
     *) fail "hpnssh -V does not report sphynx $script_version: $banner" ;;
 esac
 

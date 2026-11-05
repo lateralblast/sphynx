@@ -2,7 +2,7 @@
 # sphynx - build HPN-SSH from source and package it for target operating systems.
 set -euo pipefail
 
-SPHYNX_VERSION="1.2.3"
+SPHYNX_VERSION="1.2.4"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -97,14 +97,16 @@ parse_build_args() {
     BUILD_DIR="$(realpath -m "$BUILD_DIR")"
 }
 
-# Read the HPN-SSH version from its version.h.
-# Sets UPSTREAM_VERSION, e.g. 10.6p1+hpn18.12.0
+# Read the OpenSSH, snapshot and HPN-SSH versions from the tree's version.h.
+# Sets UPSTREAM_VERSION, e.g. 10.6p1+snapshot20261103+hpn18.12.0. The snapshot is the date of the OpenSSH commit the
+# tree is built on, and sorts above the earlier versions without it ("snapshot" comes after "hpn").
 read_upstream_version() {
-    local hdr="$SOURCE_DIR/version.h" ssh_version portable hpn
+    local hdr="$SOURCE_DIR/version.h" ssh_version portable snapshot hpn
     [ -f "$hdr" ] || die "no version.h in $SOURCE_DIR (is --source an HPN-SSH tree?)"
 
     ssh_version="$(sed -n 's/^#define SSH_VERSION[[:space:]]*"OpenSSH_\([^"]*\)".*/\1/p' "$hdr")"
     portable="$(sed -n 's/^#define SSH_PORTABLE[[:space:]]*"\([^"]*\)".*/\1/p' "$hdr")"
+    snapshot="$(sed -n 's/^#define SSH_SNAPSHOT[[:space:]]*"_snapshot\([^"]*\)".*/\1/p' "$hdr")"
     hpn="$(sed -n 's/^#define SSH_HPN[[:space:]]*"_hpn\([^"]*\)".*/\1/p' "$hdr")"
 
     [ -n "$ssh_version" ] && [ -n "$hpn" ] || die "could not read SSH_VERSION and SSH_HPN from $hdr"
@@ -114,7 +116,7 @@ read_upstream_version() {
     [ "$sphynx_tag" = "$SPHYNX_VERSION" ] \
         || die "$hdr has SSH_SPHYNX \"_sphynx$sphynx_tag\" but sphynx is $SPHYNX_VERSION; set it to \"_sphynx$SPHYNX_VERSION\""
 
-    UPSTREAM_VERSION="${ssh_version}${portable}+hpn${hpn}"
+    UPSTREAM_VERSION="${ssh_version}${portable}${snapshot:++snapshot$snapshot}+hpn${hpn}"
 }
 
 MISSING_PKGS=()

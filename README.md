@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 1.2.3
+Version: 1.2.4
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -35,7 +35,7 @@ sudo apt-get install -y autoconf automake make gcc dpkg-dev \
 sudo apt install ./dist/hpn-ssh_*.deb
 ```
 
-On Ubuntu 26.04 this produces `dist/hpn-ssh_10.6p1+hpn18.12.0+sphynx<version>-1~resolute1_<arch>.deb`.
+On Ubuntu 26.04 this produces `dist/hpn-ssh_10.6p1+snapshot20261103+hpn18.12.0+sphynx<version>-1~resolute1_<arch>.deb`.
 
 ## Command reference
 
@@ -73,17 +73,18 @@ A build writes one package to `--out`:
 hpn-ssh_<upstream>+sphynx<version>-1~<series>1_<arch>.deb
 ```
 
-`<upstream>` comes from `version.h` in the source tree, for example `10.6p1+hpn18.12.0`. `<version>` is the sphynx version.
+`<upstream>` comes from `version.h` in the source tree, for example `10.6p1+snapshot20261103+hpn18.12.0`. `<version>` is the sphynx version. The parts, in order, are the OpenSSH release, the date of the OpenSSH commit the tree is built on, the HPN-SSH release and the sphynx version. A package built before the snapshot date was added (up to sphynx 1.2.3, `10.6p1+hpn18.12.0+sphynx...`) sorts below this one, as `snapshot` comes after `hpn`, so `apt` and `dpkg` upgrade it.
 
 ## Versions
 
-The version string has three parts:
+The version string has four parts:
 
 ```
-OpenSSH_10.6p1_hpn18.12.0_sphynx<version>
+OpenSSH_10.6p1_snapshot20261103_hpn18.12.0_sphynx<version>
 ```
 
-- `OpenSSH_10.6p1` is the OpenSSH base in `sphynx-ssh/version.h`.
+- `OpenSSH_10.6p1` is the OpenSSH release the base is after, in `sphynx-ssh/version.h`.
+- `_snapshot20261103` is the date of the OpenSSH commit `sphynx-ssh/` is built on (`patches/BASE`). It is `SSH_SNAPSHOT` in `version.h`, and is the commit date of the base, so it changes when the base moves. OpenSSH master is ahead of 10.6 by many commits, so 10.6 alone would not say what the code is.
 - `_hpn18.12.0` is the HPN-SSH release.
 - `_sphynx<version>` is the sphynx version. It is `SSH_SPHYNX` in `sphynx-ssh/version.h`.
 
@@ -777,7 +778,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0014 | `scp`: check the hash field length and make `calculate_hash` fixed width. | 0.2.9 | yes |
 | 0015 | `scp`: release per-file resume state at the top of the loop. | 0.3.0 | yes |
 | 0016 | `channels`: arm the input fd only when it can be read. Fixes the client and server spinning at full CPU on long paths. | 0.3.4 | yes |
-| 0017 | `version`: add the sphynx version to the release string. | 0.0.3 | fork only |
+| 0017 | `version`: add the sphynx version, and the date of the OpenSSH commit it is built on, to the release string. | 0.0.3, 1.2.4 | fork only |
 | 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
 | 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
 | 0020 | `cipher-ctr-mt-provider`: read the cipher state through the `EVP_CIPHER_CTX`, which fixes a crash with OpenSSL 4.1. | 0.5.3 | self-contained |

@@ -4,6 +4,11 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-05
+
+### Changed
+
+- The version now says which OpenSSH the code is built on. `sphynx-ssh/` is OpenSSH master from 2026-11-03 with HPN-SSH 18.12.0 merged in, which is 10.6 plus many commits, so the release string is `OpenSSH_10.6p1_snapshot20261103_hpn18.12.0_sphynx<version>` (`hpnssh -V`, the SSH banner) and the package version is `10.6p1+snapshot20261103+hpn18.12.0+sphynx<version>-1~<series>1`. `SSH_SNAPSHOT` in `version.h` (patch 0017) holds the date, and `sphynx build` reads it. The new version sorts above the earlier ones.
 ## [1.2.3] - 2026-11-05
 
 ### Fixed

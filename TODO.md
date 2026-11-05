@@ -7,7 +7,6 @@ See [HANDOFF.md](HANDOFF.md) for the current state and suggested order.
 ## Open
 
 - [ ] sphynx-ssh: review what the move to OpenSSH master (1.2.2) brought in. The base now has the 155 OpenSSH commits made after the ones HPN-SSH has, including the fixes taken one at a time before (0057 to 0068) and the ones not looked at yet (`%j` and `ssh -G` ProxyJump text, `Include` glob errors, `ForkAfterAuthentication` implying `StdinNull`, the `misc.c` timeout and `mkdirs` fixes, and changes in `auth*.c`, `monitor*.c`, `kex.c`, `packet.c`, `krl.c`, `sftp*.c`, `ssh-keygen.c`, `ssh-agent.c`, `sshkey.c`). One regression showed up (patch 0069, `FallbackPort`); run the full suite, and read the changes in the areas HPN-SSH touches (`channels.c`, `packet.c`, `kex.c`, `sshconnect*.c`, `clientloop.c`, `serverloop.c`, `scp.c`) for another like it. Also tell HPN-SSH which of our patches are bug fixes for it.
-- [ ] sphynx: the version label still says `hpn18.12.0` (`hpnssh -V`, the package version `10.6p1+hpn18.12.0+sphynx...`), but `sphynx-ssh/` is now OpenSSH master (155 commits past 10.6) with HPN-SSH 18.12.0 merged in. Decide what to call it (`SSH_VERSION` is still `OpenSSH_10.6`), and keep the package version scheme in step with the test that checks it.
 - [ ] sphynx: the Linux suite skips the patch-series check (`sphynx-ssh does not have the upstream commit 3c6ec4c63`), because the VM's copy of `sphynx-ssh` lacks the base commit, so only the Mac run checks that the series reproduces `sphynx-ssh/`. Make the test fetch the base from `openssh-portable/` (or fail, not skip, when the commit is missing), and note in the README that `git -C sphynx-ssh fetch ../openssh-portable <commit>` is needed once.
 - [ ] sphynx: `sphynx-ssh`'s git `HEAD` is still the old HPN-based commit, so its `git status` shows the whole move to OpenSSH master as one large uncommitted diff. Commit it (a new branch may be easier) and check that `tools/patches.sh check` still passes from the committed state.
 - [ ] sphynx-ssh: `scp -Z` skips an identical file without applying `-p` times and mode from the source (the exit status is right: it is a success). The other low findings in `scp.c` are fixed in 1.0.3 to 1.0.7; the changed-destination check compares sizes only, so a change that keeps the length is not caught.
@@ -68,6 +67,7 @@ Not yet reviewed:
 
 ## Done
 
+- [x] sphynx: the version label says which OpenSSH the code is built on: `OpenSSH_10.6p1_snapshot20261103_hpn18.12.0_sphynx<version>` and package `10.6p1+snapshot20261103+hpn18.12.0+sphynx<version>-1~<series>1` (1.2.4).
 - [x] Decide how `hpn-ssh/` is kept in step with `openssh-portable/`: `sphynx-ssh/` is OpenSSH master with HPN-SSH merged in as patch 0000, and the series of sphynx patches goes on top (1.2.2). Steps to take a newer HPN-SSH or OpenSSH are in the README, "Patches".
 - [x] sphynx-ssh: give the `FallbackPort` attempt a full `ConnectTimeout` (patch 0069, 1.2.3).
 - [x] sphynx: CPU placement (pinning, NUMA, interrupt affinity): no change, closed with the result in RESEARCH.md (1.2.1).
