@@ -252,27 +252,37 @@ cmd_persist() {
     [ "$CHANGES" -gt 0 ] || [ -f "$file" ] || { echo "nothing to change"; return 0; }
     confirm
     # keep the values from before the first persist, so revert goes back to them
-    local -A prev=()
+    # and the settings the file already holds, so that a narrower run (--cc-only,
+    # --send-only) adds to them and does not drop them
+    local -A prev=() setting=()
+    local -a keys=()
     local line key value new pre cur
     if [ -f "$file" ]; then
         while read -r key value; do
             prev["$key"]="$value"
         done < <(previous_values "$file")
+        while read -r key value; do
+            setting["$key"]="$value"; keys+=("$key")
+        done < <(sed -n 's/^\([^# ][^ ]*\) = \(.*\)$/\1 \2/p' "$file")
     fi
+    for line in "${PLAN[@]}"; do
+        IFS='|' read -r key pre cur new <<<"$line"
+        [ -n "${setting[$key]+x}" ] || keys+=("$key")
+        setting["$key"]="$(setting_value "$pre" "$new")"
+        [ -n "${prev[$key]+x}" ] || prev["$key"]="$(setting_value "$pre" "$cur")"
+    done
     local tmp; tmp="$(mktemp)"
     {
         echo "# Written by tools/tune-tcp.sh from sphynx on $(date +%Y-%m-%d)."
         echo "# Larger TCP buffer maximums for HPN-SSH on long, fast paths."
         echo "# Undo with: tools/tune-tcp.sh revert"
-        for line in "${PLAN[@]}"; do
-            IFS='|' read -r key pre cur new <<<"$line"
-            echo "$key = $(setting_value "$pre" "$new")"
+        for key in "${keys[@]}"; do
+            echo "$key = ${setting[$key]}"
         done
         echo "#"
         echo "# Values before this file, used by 'tune-tcp.sh revert':"
-        for line in "${PLAN[@]}"; do
-            IFS='|' read -r key pre cur new <<<"$line"
-            echo "# previous $key = ${prev[$key]:-$(setting_value "$pre" "$cur")}"
+        for key in "${keys[@]}"; do
+            echo "# previous $key = ${prev[$key]}"
         done
     } >"$tmp"
     as_root mkdir -p "$CONF_DIR"

@@ -4,6 +4,12 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-11-17
+
+### Fixed
+
+- `tools/tune-tcp.sh persist` no longer drops earlier settings when run again with fewer of them. After `persist`, a later `persist --cc bbr --cc-only` or `persist --send-only` rewrote `/etc/sysctl.d/99-hpn-ssh-tcp.conf` with only that run's settings, so the buffer maximums were not set after a reboot and `revert` could not put them back. The new run is now merged into the file, with the earlier values kept for `revert`.
+
 ## [1.2.5] - 2026-11-17
 
 ### Changed

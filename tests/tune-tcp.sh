@@ -224,6 +224,28 @@ lin persist --yes --cc cubic --cc-only --conf-dir "$stub/sysctl.d" >/dev/null 2>
 if [ -z "$(ls "$stub/modules")" ]; then pass "persist writes no modules-load file for a built-in congestion control"
 else fail "cubic module file: $(ls "$stub/modules")"; fi
 
+# a narrower persist after a full one must add to the file, not replace what it held
+lin_reset; touch "$stub/state/loadable_tcp_bbr"; rm -rf "$stub/sysctl.d" "$stub/modules"; mkdir -p "$stub/modules"
+f="$stub/sysctl.d/99-hpn-ssh-tcp.conf"
+lin persist --yes --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+lin persist --yes --cc bbr --cc-only --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+if grep -q '^net.ipv4.tcp_wmem = 4096 16384 ' "$f" && grep -q '^net.ipv4.tcp_rmem = ' "$f" \
+   && grep -q '^net.ipv4.tcp_congestion_control = bbr$' "$f" \
+   && grep -q '^# previous net.ipv4.tcp_wmem = 4096 16384 4194304$' "$f" \
+   && grep -q '^# previous net.ipv4.tcp_rmem = ' "$f" \
+   && grep -q '^# previous net.ipv4.tcp_congestion_control = cubic$' "$f"; then
+    pass "a later persist --cc-only keeps the buffer settings and their previous values in the file"
+else fail "persist then persist --cc-only lost settings: $(cat "$f" 2>&1)"; fi
+lin persist --yes --send-only --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+if grep -q '^net.ipv4.tcp_rmem = ' "$f" && grep -q '^# previous net.ipv4.tcp_rmem = ' "$f"; then
+    pass "a later persist --send-only keeps the receive setting"
+else fail "persist --send-only lost tcp_rmem: $(cat "$f" 2>&1)"; fi
+lin revert --conf-dir "$stub/sysctl.d" >/dev/null 2>&1
+if [ "$(cc_now)" = cubic ] && [ "$(cat "$stub/state/net.ipv4.tcp_wmem")" = "4096 16384 4194304" ] \
+   && [ ! -e "$f" ]; then
+    pass "revert after several persists restores every setting"
+else fail "revert after several persists: cc=$(cc_now) wmem=$(cat "$stub/state/net.ipv4.tcp_wmem")"; fi
+
 for bad in "--cc Bad;name" "--cc-only"; do
     # shellcheck disable=SC2086 # the options are meant to split
     if lin show $bad >/dev/null 2>&1; then fail "accepted: $bad"; else pass "rejected: $bad"; fi
