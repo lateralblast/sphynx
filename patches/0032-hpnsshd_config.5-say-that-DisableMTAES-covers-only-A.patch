@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 32/55] hpnsshd_config.5: say that DisableMTAES covers only
+ AES-CTR
+
+DisableMTAES switches the multithreaded AES-CTR cipher back to the stock one.
+It does not touch the multithreaded ChaCha20-Poly1305 cipher, which the server
+picks when chacha20-poly1305-mt@hpnssh.org is in Ciphers and the client
+chooses ChaCha20-Poly1305, so a reader who set DisableMTAES could expect both
+to be off. Say so, and say how to keep the serial ChaCha.
+---
+ hpnsshd_config.5 | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/hpnsshd_config.5 b/hpnsshd_config.5
+index 01fae5add..df243544a 100644
+--- a/hpnsshd_config.5
++++ b/hpnsshd_config.5
+@@ -733,6 +733,13 @@ simplify restricted configurations.
+ Switch the encryption cipher being used from the multithreaded MT-AES-CTR cipher
+ back to the stock single-threaded AES-CTR cipher. Default is 
+ .Cm no. HPNSSH only. 
++It affects only the AES-CTR cipher. The multithreaded ChaCha20-Poly1305 cipher
++is used when
++.Cm chacha20-poly1305-mt@hpnssh.org
++is in
++.Cm Ciphers
++and the client chooses ChaCha20-Poly1305; to keep the serial cipher, leave that name out of
++.Cm Ciphers .
+ .It Cm ExposeAuthInfo
+ Writes a temporary file containing a list of authentication methods and
+ public credentials (e.g. keys) used to authenticate the user.
+-- 
+2.50.0

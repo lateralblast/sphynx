@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 27/55] clientloop: give children started from the loop a clean
+ signal mask
+
+client_loop() blocks SIGHUP, SIGINT, SIGQUIT and SIGTERM for the whole loop and
+unblocks them only inside ppoll(), to save two sigprocmask() calls per pass.
+A child started from inside the loop (the command typed after ~C and !, and the
+xauth command that system() and popen() run for a session opened through a
+control master) inherited that mask and could not be stopped by those signals.
+
+Remember the mask the loop will restore, and set it around those three calls.
+---
+ clientloop.c | 38 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/clientloop.c b/clientloop.c
+index fc8552f6d..b538fdd00 100644
+--- a/clientloop.c
++++ b/clientloop.c
+@@ -158,6 +158,30 @@ static time_t server_alive_time;	/* Time to do server_alive_check */
+ static int hostkeys_update_complete;
+ static int session_setup_complete;
+ 
++/*
++ * While client_loop() runs it keeps the termination signals blocked, and
++ * unblocks them only inside ppoll(). A child started from the loop would
++ * inherit that mask and ignore HUP, INT, QUIT and TERM, so this points at the
++ * mask to give a child while the loop has them blocked, and is NULL otherwise.
++ */
++static const sigset_t *loop_child_sigmask;
++
++/* Give the caller the mask a child should start with; see child_sigmask_end() */
++static int
++child_sigmask_begin(sigset_t *saved)
++{
++	if (loop_child_sigmask == NULL)
++		return 0;
++	return sigprocmask(SIG_SETMASK, loop_child_sigmask, saved) == 0;
++}
++
++static void
++child_sigmask_end(int swapped, const sigset_t *saved)
++{
++	if (swapped && sigprocmask(SIG_SETMASK, saved, NULL) == -1)
++		error_f("sigprocmask: %s", strerror(errno));
++}
++
+ static void client_init_dispatch(struct ssh *ssh);
+ int	session_ident = -1;
+ int     metrics_hdr_remote_flag = 0;
+@@ -302,7 +326,8 @@ client_x11_get_proto(struct ssh *ssh, const char *display,
+ 	char xauthfile[PATH_MAX], xauthdir[PATH_MAX];
+ 	static char proto[512], data[512];
+ 	FILE *f;
+-	int got_data = 0, generated = 0, do_unlink = 0, r;
++	int got_data = 0, generated = 0, do_unlink = 0, r, swapped;
++	sigset_t saved_sigs;
+ 	struct stat st;
+ 	u_int now, x11_timeout_real;
+ 
+@@ -392,8 +417,10 @@ client_x11_get_proto(struct ssh *ssh, const char *display,
+ 				channel_set_x11_refuse_time(ssh,
+ 				    x11_refuse_time);
+ 			}
++			swapped = child_sigmask_begin(&saved_sigs);
+ 			if (system(cmd) == 0)
+ 				generated = 1;
++			child_sigmask_end(swapped, &saved_sigs);
+ 			free(cmd);
+ 		}
+ 
+@@ -410,7 +437,9 @@ client_x11_get_proto(struct ssh *ssh, const char *display,
+ 			    generated ? xauthfile : "",
+ 			    display);
+ 			debug2("x11_get_proto: %s", cmd);
++			swapped = child_sigmask_begin(&saved_sigs);
+ 			f = popen(cmd, "r");
++			child_sigmask_end(swapped, &saved_sigs);
+ 			if (f && fgets(line, sizeof(line), f) &&
+ 			    sscanf(line, "%*s %511s %511s", proto, data) == 2)
+ 				got_data = 1;
+@@ -994,7 +1023,8 @@ process_cmdline(struct ssh *ssh)
+ {
+ 	void (*handler)(int);
+ 	char *s, *cmd;
+-	int ok, delete = 0, local = 0, remote = 0, dynamic = 0;
++	int ok, delete = 0, local = 0, remote = 0, dynamic = 0, swapped;
++	sigset_t saved_sigs;
+ 	struct Forward fwd;
+ 
+ 	memset(&fwd, 0, sizeof(fwd));
+@@ -1034,7 +1064,9 @@ process_cmdline(struct ssh *ssh)
+ 
+ 	if (*s == '!' && options.permit_local_command) {
+ 		s++;
++		swapped = child_sigmask_begin(&saved_sigs);
+ 		ssh_local_cmd(s);
++		child_sigmask_end(swapped, &saved_sigs);
+ 		goto out;
+ 	}
+ 
+@@ -1588,6 +1620,7 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
+ 	 */
+ 	if (sigprocmask(SIG_BLOCK, &bsigset, &osigset) == -1)
+ 		error_f("bsigset sigprocmask: %s", strerror(errno));
++	loop_child_sigmask = &osigset;
+ 
+ 	/* Main loop of the client for the interactive session mode. */
+ 	while (!quit_pending) {
+@@ -1692,6 +1725,7 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
+ 	}
+ 
+ 	/* Restore the pre-loop signal mask now that we are done polling. */
++	loop_child_sigmask = NULL;
+ 	if (sigprocmask(SIG_SETMASK, &osigset, NULL) == -1)
+ 		error_f("osigset sigprocmask: %s", strerror(errno));
+ 
+-- 
+2.50.0

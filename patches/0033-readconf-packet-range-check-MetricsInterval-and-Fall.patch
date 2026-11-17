@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 33/55] readconf, packet: range check MetricsInterval and
+ FallbackPort, and do not return success with no cipher
+
+MetricsInterval and FallbackPort were parsed as any non-negative integer. An
+interval of 0 sent a metrics request on every pass of the client loop, and a
+port above 65535 went on to resolve_host(). Accept 1 to 86400 and 1 to 65535.
+
+ssh_set_newkeys() returned r when it could not find the multithreaded ChaCha
+cipher, but r held the result of the earlier MAC setup (0), so it would have
+reported success with no cipher. It now returns SSH_ERR_INTERNAL_ERROR. The
+name is always found today, so this is only a guard.
+---
+ packet.c   |  2 +-
+ readconf.c | 11 +++++++++++
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/packet.c b/packet.c
+index 56dd0d042..dfca98c0c 100644
+--- a/packet.c
++++ b/packet.c
+@@ -1113,7 +1113,7 @@ ssh_set_newkeys(struct ssh *ssh, int mode)
+ 			enc->cipher = cipher_by_name(
+ 			    "chacha20-poly1305@openssh.com");
+ 		if (enc->cipher == NULL)
+-			return r;
++			return SSH_ERR_INTERNAL_ERROR;
+ 	}
+ #endif
+ 	if ((r = cipher_init(ccp, enc->cipher, enc->key, enc->key_len, enc->iv,
+diff --git a/readconf.c b/readconf.c
+index 30604a849..f4efb6329 100644
+--- a/readconf.c
++++ b/readconf.c
+@@ -1211,6 +1211,7 @@ process_config_line_depth(Options *options, struct passwd *pw, const char *host,
+ 	char **cpptr, ***cppptr, fwdarg[256];
+ 	u_int i, *uintptr, max_entries = 0;
+ 	int r, oactive, negated, opcode, *intptr, value, value2, cmdline = 0;
++	int int_min = 0, int_max = 0;	/* limits for parse_int, if int_max != 0 */
+ 	int remotefwd, dynamicfwd, ca_only = 0, found = 0;
+ 	LogLevel *log_level_ptr;
+ 	SyslogFacility *log_facility_ptr;
+@@ -1440,6 +1441,9 @@ parse_time:
+ 
+ 	case oMetricsInterval:
+ 		intptr = &options->metrics_interval;
++		/* an interval of 0 or less would poll on every pass of the loop */
++		int_min = 1;
++		int_max = 86400;
+ 		goto parse_int;
+ 
+ 	case oMetricsPath:
+@@ -1456,6 +1460,8 @@ parse_time:
+ 
+ 	case oFallbackPort:
+ 		intptr = &options->fallback_port;
++		int_min = 1;
++		int_max = 65535;
+ 		goto parse_int;
+ 
+ 	/*
+@@ -1726,6 +1732,11 @@ parse_int:
+ 			    filename, linenum, errstr);
+ 			goto out;
+ 		}
++		if (int_max != 0 && (value < int_min || value > int_max)) {
++			error("%s line %d: %s must be from %d to %d.",
++			    filename, linenum, keyword, int_min, int_max);
++			goto out;
++		}
+ 		if (*activep && *intptr == -1)
+ 			*intptr = value;
+ 		break;
+-- 
+2.50.0

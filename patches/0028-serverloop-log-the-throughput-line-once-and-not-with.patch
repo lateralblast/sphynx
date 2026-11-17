@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 28/55] serverloop: log the throughput line once, and not with
+ a zero duration divisor
+
+server_loop2() called sshpkt_final_log_entry() once before the channels were
+freed and again after, with a comment questioning the first, so a session that
+ended by the loop (a client that dropped the connection without a disconnect
+message) logged the same "LType: Throughput" line twice. The line is also
+printed from the fatal paths in packet.c, where the loop has not run.
+
+Keep the call that comes after the channels close. A session that has run for
+no time now reports a rate of 0 and not inf or nan.
+---
+ packet.c     | 5 +++--
+ serverloop.c | 5 +----
+ 2 files changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/packet.c b/packet.c
+index 9c0c65621..35472fb20 100644
+--- a/packet.c
++++ b/packet.c
+@@ -2260,11 +2260,12 @@ sshpkt_final_log_entry (struct ssh *ssh) {
+ 	else
+ 		total_time = monotime_double() - ssh->start_time;
+ 
++	/* a session that ended at once has no rate to report */
+ 	logit("SSH: Server;LType: Throughput;Remote: %s-%d;IN: %lu;OUT: %lu;Duration: %.1f;tPut_in: %.1f;tPut_out: %.1f",
+ 	      ssh_remote_ipaddr(ssh), ssh_remote_port(ssh),
+ 	      ssh->stdin_bytes, ssh->fdout_bytes, total_time,
+-	      ssh->stdin_bytes / total_time,
+-	      ssh->fdout_bytes / total_time);
++	      total_time > 0 ? ssh->stdin_bytes / total_time : 0.0,
++	      total_time > 0 ? ssh->fdout_bytes / total_time : 0.0);
+ }
+ 
+ /*
+diff --git a/serverloop.c b/serverloop.c
+index 866b50fde..b93e2dfe1 100644
+--- a/serverloop.c
++++ b/serverloop.c
+@@ -397,14 +397,11 @@ server_loop2(struct ssh *ssh, Authctxt *authctxt)
+ 	collect_children(ssh);
+ 	free(pfd);
+ 
+-	/* write final log entry (do we need this here? -cjr)*/
+-	sshpkt_final_log_entry(ssh);
+-
+ 	/* free all channels, no more reads and writes */
+ 	channel_free_all(ssh);
+ 
+ 	/* final entry must come after channels close -cjr */
+-        sshpkt_final_log_entry(ssh);
++	sshpkt_final_log_entry(ssh);
+ 
+ 	/* free remaining sessions, e.g. remove wtmp entries */
+ 	session_destroy_all(ssh, NULL);
+-- 
+2.50.0

@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH] ssh: give the FallbackPort attempt a full ConnectTimeout
+
+After a timed out connect to the default port the client tries FallbackPort, but
+passed on the time that was left of ConnectTimeout, which is 0 once it has run
+out. OpenSSH's waitrfd() now treats a timeout of 0 or less as no limit, so on
+a base that has that change the second attempt waited for as long as the system
+allows. Reset the time to the whole ConnectTimeout before the retry.
+---
+ ssh.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/ssh.c b/ssh.c
+index 7e8d72d90..08c18ca99 100644
+--- a/ssh.c
++++ b/ssh.c
+@@ -1763,6 +1763,15 @@ tryagain:
+ 				freeaddrinfo(addrs);
+ 			addrs = resolve_host(host, port, 1,
+ 					     cname, sizeof(cname));
++			/*
++			 * The first attempt left the time that remained of
++			 * ConnectTimeout in timeout_ms, which is 0 once it ran
++			 * out, and 0 means no limit: give this one a full turn.
++			 */
++			if (options.connection_timeout >= INT_MAX/1000)
++				timeout_ms = INT_MAX;
++			else
++				timeout_ms = options.connection_timeout * 1000;
+ 			goto tryagain;
+ 		} else {
+ 			exit(255);
+-- 
+2.50.0

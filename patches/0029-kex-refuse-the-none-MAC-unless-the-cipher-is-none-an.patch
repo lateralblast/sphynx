@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 29/55] kex: refuse the none MAC unless the cipher is none and
+ the user is logged in
+
+choose_mac() was given the client's and server's MAC lists as they were, so a
+client that listed "none" in MACs, talking to a server with NoneMacEnabled,
+negotiated a real cipher (aes256-ctr) with MAC "none" during the first key
+exchange: the stream had no integrity check before authentication. A man in
+the middle cannot force this, because the proposals are covered by the signed
+exchange hash, but a MACs line or a server configuration that lists none is
+enough.
+
+Drop "none" from both MAC lists unless the cipher chosen is "none" and the
+connection is authenticated, so the names after it are used instead.
+---
+ kex.c | 37 +++++++++++++++++++++++++++++++------
+ 1 file changed, 31 insertions(+), 6 deletions(-)
+
+diff --git a/kex.c b/kex.c
+index 6f88ea200..6315d4558 100644
+--- a/kex.c
++++ b/kex.c
+@@ -1172,12 +1172,37 @@ kex_choose_conf(struct ssh *ssh, uint32_t seq)
+ #endif
+ 		authlen = cipher_authlen(newkeys->enc.cipher);
+ 		/* ignore mac for authenticated encryption */
+-		if (authlen == 0 &&
+-		    (r = choose_mac(ssh, &newkeys->mac, cprop[nmac],
+-		    sprop[nmac])) != 0) {
+-			kex->failed_choice = peer[nmac];
+-			peer[nmac] = NULL;
+-			goto out;
++		if (authlen == 0) {
++			char *cmac = cprop[nmac], *smac = sprop[nmac];
++			char *cfilt = NULL, *sfilt = NULL;
++
++			/*
++			 * The none MAC is for the none cipher after
++			 * authentication. With any other cipher, or before
++			 * authentication, it would leave the stream with no
++			 * integrity check, so it is not a choice.
++			 */
++			if (!(auth_flag == 1 &&
++			    strcmp(newkeys->enc.name, "none") == 0)) {
++				if ((cfilt = match_filter_denylist(cmac,
++				    "none")) == NULL ||
++				    (sfilt = match_filter_denylist(smac,
++				    "none")) == NULL) {
++					free(cfilt);
++					r = SSH_ERR_ALLOC_FAIL;
++					goto out;
++				}
++				cmac = cfilt;
++				smac = sfilt;
++			}
++			r = choose_mac(ssh, &newkeys->mac, cmac, smac);
++			free(cfilt);
++			free(sfilt);
++			if (r != 0) {
++				kex->failed_choice = peer[nmac];
++				peer[nmac] = NULL;
++				goto out;
++			}
+ 		}
+ 		if ((r = choose_comp(&newkeys->comp, cprop[ncomp],
+ 		    sprop[ncomp])) != 0) {
+-- 
+2.50.0

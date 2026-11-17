@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 39/55] cipher-switch: switch to the multithreaded cipher once
+ per connection
+
+cipher_switch() is called for every session channel the server starts. The
+multithreaded AES-CTR context keeps the plain cipher name, so the test for
+"ctr" in the name was true every time, and every extra session on a
+multiplexed connection asked for another rekey. The sessions already running
+stalled behind each one, and each rekey built a new set of cipher threads.
+
+Remember that the switch was made in ssh->mt_enabled (set for ChaCha as well,
+which the name test caught only while no multithreaded ChaCha was in use) and
+return early when it is set.
+---
+ cipher-switch.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/cipher-switch.c b/cipher-switch.c
+index 26867c317..8de6bf7e2 100644
+--- a/cipher-switch.c
++++ b/cipher-switch.c
+@@ -47,6 +47,18 @@ cipher_switch(struct ssh *ssh) {
+ 	const char *recv = cipher_ctx_name(recv_cc);
+ 
+ 	debug_f("Send: %s Recv: %s", send, recv);
++
++	/*
++	 * This is called for every session channel that is started. The
++	 * switch is made once per connection: the multithreaded AES-CTR
++	 * context keeps the plain cipher name, so without this every extra
++	 * session on a multiplexed connection asked for another rekey, and
++	 * the sessions already running stalled behind each one.
++	 */
++	if (ssh->mt_enabled) {
++		debug_f("already switched");
++		return;
++	}
+ 	
+ 	/* if the name of the cipher matches then we set the context
+ 	 * to authenticated (it likely already is though) and then
+@@ -70,6 +82,7 @@ cipher_switch(struct ssh *ssh) {
+ 	if ((strcmp(send, "chacha20-poly1305@openssh.com") == 0) ||
+ 	    (strcmp(recv, "chacha20-poly1305@openssh.com") == 0)) {
+ 		debug("Serial to parallel Chacha20-poly1305 cipher swap");
++		ssh->mt_enabled = 1;
+ 		ssh_packet_set_authenticated(ssh);
+ 		packet_request_rekeying();
+ 	}
+-- 
+2.50.0

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 52/55] scp: report a skipped unwritable destination as a
+ failure with -Z
+
+When the destination file could not be written, the "scp -Z" sink printed
+"Permission denied", answered with a skip, and went on, so scp exited 0 and the
+caller was told the copy had worked although the file was not updated. Count it
+as an error so the exit status is not 0. The protocol is unchanged.
+---
+ scp.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/scp.c b/scp.c
+index c1f4a60d9..fff4a4484 100644
+--- a/scp.c
++++ b/scp.c
+@@ -2371,6 +2371,8 @@ sink(int argc, char **argv, const char *src)
+ 				 * because using a define isn't working */
+ 				if (access (np, W_OK) != 0) {
+ 					fprintf(stderr, "scp: %s: Permission denied on %s\n", np, hostname);
++					/* the file was not updated: the exit status says so */
++					++errs;
+ 					snprintf(outbuf, BUF_AND_HASH, "S%-*s", BUF_AND_HASH-2, " ");
+ 					(void)atomicio(vwrite, remout, outbuf, strlen(outbuf));
+ 					(void)atomicio(vwrite, remout, "", 1);
+-- 
+2.50.0

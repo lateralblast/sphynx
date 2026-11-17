@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 46/55] scp: stop if the resume match status cannot be read
+
+After the sink in "scp -Z" mode sends its resume reply it reads one byte, the
+sender's match status. The return value of that read was ignored and match was
+never initialised, so if the connection ended there the sink carried on with
+whatever was in the variable (the previous file's value, or whatever the stack
+held) and created the temporary file for the tail before failing on the next
+read.
+
+Initialise match and treat a failed read as a protocol error.
+---
+ scp.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index 43a7cd68e..f8befd4c1 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1964,7 +1964,7 @@ sink(int argc, char **argv, const char *src)
+ 	char local_hashsum[HASH_LEN+1];
+ 	char tmpbuf[BUF_AND_HASH];
+ 	char outbuf[BUF_AND_HASH];
+-	char match;
++	char match = 0;
+ 	int bad_match_flag = 0;
+ 	np = NULL; /* this was originally '/0' but that's wrong */
+ 	np_tmp = NULL;
+@@ -2399,7 +2399,8 @@ sink(int argc, char **argv, const char *src)
+ 
+ 			/* the remote is always going to send a match status
+ 			 * so we need to read it so we don't get out of sync */
+-			(void) atomicio(read, remin, &match, 1);
++			if (atomicio(read, remin, &match, 1) != 1)
++				SCREWUP("lost connection reading the resume match status");
+ 			if (match != 'M') {/*fragments do not match*/
+ 				/* expected response of F, M and NULL *but*
+ 				 * anything other than M is a failure
+-- 
+2.50.0

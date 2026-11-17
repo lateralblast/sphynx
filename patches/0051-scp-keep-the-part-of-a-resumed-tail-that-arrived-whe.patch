@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 50/55] scp: keep the part of a resumed tail that arrived when
+ the connection drops
+
+In "scp -Z" mode the sink writes the tail of the file to a temporary file and
+appends it to the real file only when all of it has arrived. A connection that
+ended partway through the tail went to the "dropped connection" exit, which
+neither appended what had arrived nor removed the temporary file: the target
+stayed as it was, the next run sent the same bytes again, and a
+name<8 random characters> file was left in the directory.
+
+On a drop, write what is in the buffer, close the temporary file, append it to
+the target and remove it, then report the error as before. The append is moved
+out of the normal path into resume_append(), which both use, and which still
+puts the target back to its old length if the append fails.
+---
+ scp.c | 126 +++++++++++++++++++++++++++++++++++++---------------------
+ 1 file changed, 80 insertions(+), 46 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index bec86fafa..ce4cc5e73 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1962,6 +1962,63 @@ resume_discard(off_t n)
+ 	(void) atomicio(read, remin, junk, 1);
+ }
+ 
++/*
++ * Append the file "tail", which holds the end of a resumed transfer, to
++ * "orig", which had orig_size bytes before it began, and remove "tail". If the
++ * tail was not written completely (wrerr) or the append fails, put orig back
++ * to the length it had, so that it never holds a partly appended tail.
++ */
++static void
++resume_append(const char *tail, const char *orig, off_t orig_size, int wrerr)
++{
++	FILE *of = NULL, *tf = NULL;
++	char res_buf[512]; /* set at 512 just because, might want to increase*/
++	size_t res_bytes;
++	int cat_ok = 0;
++
++	if (wrerr) {
++		/*
++		 * The tail was not written completely. Appending it would
++		 * corrupt the existing file, so leave that alone. The error
++		 * has already been recorded.
++		 */
++	} else if ((of = fopen(orig, "a")) == NULL) {
++		note_err("%s: could not open for appending: %s",
++		    orig, strerror(errno));
++	} else if ((tf = fopen(tail, "r")) == NULL) {
++		note_err("%s: could not open for reading: %s",
++		    tail, strerror(errno));
++	} else {
++		cat_ok = 1;
++		while ((res_bytes = fread(res_buf, 1, sizeof(res_buf),
++		    tf)) > 0) {
++			if (fwrite(res_buf, 1, res_bytes, of) != res_bytes) {
++				note_err("%s: append: %s", orig, strerror(errno));
++				cat_ok = 0;
++				break;
++			}
++		}
++		if (cat_ok && ferror(tf)) {
++			note_err("%s: read: %s", tail, strerror(errno));
++			cat_ok = 0;
++		}
++	}
++	if (tf != NULL)
++		fclose(tf);
++	if (of != NULL && fclose(of) != 0 && cat_ok) {
++		note_err("%s: close: %s", orig, strerror(errno));
++		cat_ok = 0;
++	}
++	if (of != NULL && !cat_ok) {
++		/* put the existing file back to the length it had */
++		if (truncate(orig, orig_size) != 0)
++			note_err("%s: restore: %s", orig, strerror(errno));
++	}
++	/* delete the temporary file */
++	remove(tail);
++}
++
++
+ void
+ sink(int argc, char **argv, const char *src)
+ {
+@@ -2523,6 +2580,28 @@ bad:			run_err("%s: %s", np, strerror(errno));
+ 				j = atomicio6(read, remin, cp, amt,
+ 				    scpio, &statbytes);
+ 				if (j == 0) {
++					/*
++					 * In resume mode the bytes so far are the start
++					 * of the tail, in a temporary file. Keep them: write
++					 * what is in the buffer, then append the file to
++					 * the target, so that the next run resumes from
++					 * here. Otherwise they would be sent again, and the
++					 * temporary file left behind.
++					 */
++					if (resume_flag && np_tmp != NULL &&
++					    !bad_match_flag) {
++						size_t have = cp - bp->buf;
++
++						if (!wrerr && have > 0 &&
++						    atomicio(vwrite, ofd, bp->buf,
++						    have) != have)
++							wrerr = 1;
++						if (close(ofd) == -1)
++							wrerr = 1;
++						ofd = -1;
++						resume_append(np, np_tmp,
++						    npstat.st_size, wrerr);
++					}
+ 					run_err("%s", j != EPIPE ?
+ 					    strerror(errno) :
+ 					    "dropped connection");
+@@ -2562,10 +2641,6 @@ bad:			run_err("%s: %s", np, strerror(errno));
+ 			 hostname, resume_flag, np_tmp, bad_match_flag);
+ #endif
+ 		if (resume_flag && np_tmp && !bad_match_flag) {
+-			FILE *orig = NULL, *resume = NULL;
+-			char res_buf[512]; /* set at 512 just because, might want to increase*/
+-			size_t res_bytes;
+-			int cat_ok = 0;
+ #ifdef DEBUG
+ 			fprintf(stderr, "%s: Resume flag is set. Going to concat %s to %s  now\n",
+ 				hostname, np, np_tmp);
+@@ -2578,48 +2653,7 @@ bad:			run_err("%s: %s", np, strerror(errno));
+ 			if (close(ofd) == -1)
+ 				note_err("%s: close: %s", np, strerror(errno));
+ 			ofd = -1;
+-			if (wrerr) {
+-				/*
+-				 * The tail was not written completely. Appending it would
+-				 * corrupt the existing file, so leave that alone. The error
+-				 * has already been recorded.
+-				 */
+-			} else if ((orig = fopen(np_tmp, "a")) == NULL) {
+-				note_err("%s: could not open for appending: %s",
+-				    np_tmp, strerror(errno));
+-			} else if ((resume = fopen(np, "r")) == NULL) {
+-				note_err("%s: could not open for reading: %s",
+-				    np, strerror(errno));
+-			} else {
+-				cat_ok = 1;
+-				while ((res_bytes = fread(res_buf, 1, sizeof(res_buf),
+-				    resume)) > 0) {
+-					if (fwrite(res_buf, 1, res_bytes, orig) != res_bytes) {
+-						note_err("%s: append: %s", np_tmp,
+-						    strerror(errno));
+-						cat_ok = 0;
+-						break;
+-					}
+-				}
+-				if (cat_ok && ferror(resume)) {
+-					note_err("%s: read: %s", np, strerror(errno));
+-					cat_ok = 0;
+-				}
+-			}
+-			if (resume != NULL)
+-				fclose(resume);
+-			if (orig != NULL && fclose(orig) != 0 && cat_ok) {
+-				note_err("%s: close: %s", np_tmp, strerror(errno));
+-				cat_ok = 0;
+-			}
+-			if (orig != NULL && !cat_ok) {
+-				/* put the existing file back to the length it had */
+-				if (truncate(np_tmp, npstat.st_size) != 0)
+-					note_err("%s: restore: %s", np_tmp,
+-					    strerror(errno));
+-			}
+-			/* delete the temporary file */
+-			remove(np);
++			resume_append(np, np_tmp, npstat.st_size, wrerr);
+ #ifdef DEBUG
+ 			fprintf (stderr, "%s: np(%s) and np_tmp(%s)\n", hostname, np, np_tmp);
+ #endif
+-- 
+2.50.0

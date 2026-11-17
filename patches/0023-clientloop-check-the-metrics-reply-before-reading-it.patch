@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 23/55] clientloop: check the metrics reply before reading it
+
+client_process_request_metrics() passed the string it got from the server to
+the binn functions, which are given no size. Its length was never checked,
+the result of sshpkt_get_string_direct() was ignored (so a failed read left
+the pointer uninitialised) and an empty reply was reported but then parsed
+anyway. A server that sent a short or lying object made the client read past
+the packet buffer.
+
+Add metrics_blob_valid(), which checks that the blob is one whole binn object
+of exactly the length received, and call it first. A reply that fails the
+check is reported and skipped; the local metrics are still written.
+---
+ clientloop.c | 18 +++++++++++++-----
+ metrics.c    | 16 ++++++++++++++++
+ metrics.h    |  1 +
+ 3 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/clientloop.c b/clientloop.c
+index aa9661d2c..eaf729c10 100644
+--- a/clientloop.c
++++ b/clientloop.c
+@@ -2727,7 +2727,7 @@ client_input_hostkeys(struct ssh *ssh)
+ static void
+ client_process_request_metrics (struct ssh *ssh, int type, u_int32_t seq, void *_ctx) {
+ 	struct tcp_info local_tcp_info;
+-	const u_char *blob;
++	const u_char *blob = NULL;
+ 	FILE *remfptr;
+ 	FILE *localfptr;
+ 	char remfilename[1024];
+@@ -2780,11 +2780,19 @@ client_process_request_metrics (struct ssh *ssh, int type, u_int32_t seq, void *
+ 
+ 	/* read the entire packet string into blob
+ 	 * blob has to be a const uchar as that's what string_direct expects
+-	 * we cast it as a void for the binn functions */
+-	sshpkt_get_string_direct(ssh, &blob, &len);
+-	if (len == 0) {
+-		/* received no data. which is weird */
++	 * we cast it as a void for the binn functions. The server sent it,
++	 * so check it is a whole, well formed binn object before the binn
++	 * functions, which are given no size, read from it. */
++	if ((r = sshpkt_get_string_direct(ssh, &blob, &len)) != 0 ||
++	    len == 0) {
+ 		error("Received no remote metrics data. Continuing.");
++		fclose(remfptr);
++		goto localonly;
++	}
++	if (!metrics_blob_valid(blob, len)) {
++		error("Received bad remote metrics data. Continuing.");
++		fclose(remfptr);
++		goto localonly;
+ 	}
+ 
+ 	/* get the kernel version printing the header */
+diff --git a/metrics.c b/metrics.c
+index 9b1b1562c..4042530b1 100644
+--- a/metrics.c
++++ b/metrics.c
+@@ -18,6 +18,7 @@
+ #include "includes.h"
+ #include "metrics.h"
+ #include "ssherr.h"
++#include <limits.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ 
+@@ -244,6 +245,21 @@ metrics_write_binn_object(struct tcp_info *data, struct binn_struct *binnobj) {
+ #endif /*endif for TCP_INFO */
+ }
+ 
++/* The binn functions that read a value take no size, so a blob that came from
++ * the peer must be checked before any of them is called. This is true when
++ * the blob is one whole binn object of exactly len bytes, and every key and
++ * value in it lies inside it. */
++int
++metrics_blob_valid(const void *blob, size_t len)
++{
++	int size;
++
++	if (blob == NULL || len == 0 || len > INT_MAX)
++		return 0;
++	size = (int)len;
++	return binn_is_valid_ex(blob, NULL, NULL, &size) ? 1 : 0;
++}
++
+ /* this reads out the tcp_info binn object and formats it into a single line
+  * the object will not necessarily have all of the elements. If it's empty it
+  * current just spits out 0. This isn't optimal as 0 can also be a valid value */
+diff --git a/metrics.h b/metrics.h
+index 7148cb982..887697bd4 100644
+--- a/metrics.h
++++ b/metrics.h
+@@ -38,6 +38,7 @@ typedef struct tcp_info {
+ #endif
+ 
+ void metrics_write_binn_object(struct tcp_info *, struct binn_struct *);
++int metrics_blob_valid(const void *, size_t);
+ void metrics_read_binn_object(void *, char *);
+ void metrics_print_header(FILE *, char *, int);
+ 
+-- 
+2.50.0

@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 41/55] sshd-session: drop "none" from the proposal where a
+ Match block turns it off
+
+The key exchange proposal is made in sshd-auth before the user is known, with
+"none" added to the ciphers and MACs when NoneEnabled and NoneMacEnabled are on
+in the global configuration. A Match block for the user can turn either off,
+and the options the session sees include it, but nothing used that: the stored
+proposal still named "none", and the client could switch to the none cipher
+and none MAC after login, against "NoneEnabled no".
+
+When the post-authentication process has applied the key state, take "none"
+out of the cipher lists if NoneEnabled is off, and out of the MAC lists if
+NoneEnabled or NoneMacEnabled is off. A client that then asks for none is
+refused by the key exchange, as it would be with the option off everywhere.
+---
+ sshd-session.c | 56 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/sshd-session.c b/sshd-session.c
+index 2a2911fe3..bda83c30a 100644
+--- a/sshd-session.c
++++ b/sshd-session.c
+@@ -368,6 +368,59 @@ privsep_preauth(struct ssh *ssh)
+ 	}
+ }
+ 
++/*
++ * The key exchange proposal is made before the user is known, with "none"
++ * added to the ciphers and MACs when NoneEnabled and NoneMacEnabled are on
++ * in the global configuration. A Match block for the user can turn either off,
++ * but nothing looked at the result: the proposal still named "none", and the
++ * client could switch to it after login. Now that the options include the
++ * Match blocks, take "none" out of the proposal again where it is not allowed.
++ */
++static void
++restrict_none_proposal(struct ssh *ssh)
++{
++	char **prop = NULL;
++	int r, change = 0;
++
++	if (options.none_enabled == 1 && options.nonemac_enabled == 1)
++		return;
++	if (ssh->kex == NULL || ssh->kex->my == NULL)
++		return;
++	if ((r = kex_buf2prop(ssh->kex->my, NULL, &prop)) != 0) {
++		error_fr(r, "kex_buf2prop");
++		return;
++	}
++	if (options.none_enabled != 1) {
++		int i;
++
++		for (i = PROPOSAL_ENC_ALGS_CTOS; i <= PROPOSAL_ENC_ALGS_STOC; i++) {
++			char *f = match_filter_denylist(prop[i], "none");
++
++			if (f == NULL)
++				fatal_f("match_filter_denylist failed");
++			free(prop[i]);
++			prop[i] = f;
++		}
++		change = 1;
++	}
++	if (options.none_enabled != 1 || options.nonemac_enabled != 1) {
++		int i;
++
++		for (i = PROPOSAL_MAC_ALGS_CTOS; i <= PROPOSAL_MAC_ALGS_STOC; i++) {
++			char *f = match_filter_denylist(prop[i], "none");
++
++			if (f == NULL)
++				fatal_f("match_filter_denylist failed");
++			free(prop[i]);
++			prop[i] = f;
++		}
++		change = 1;
++	}
++	if (change && (r = kex_prop2buf(ssh->kex->my, prop)) != 0)
++		fatal_fr(r, "kex_prop2buf");
++	kex_prop_free(prop);
++}
++
+ static void
+ privsep_postauth(struct ssh *ssh, Authctxt *authctxt)
+ {
+@@ -405,6 +458,9 @@ privsep_postauth(struct ssh *ssh, Authctxt *authctxt)
+ 	/* It is safe now to apply the key state */
+ 	monitor_apply_keystate(ssh, pmonitor);
+ 
++	/* the key state has the proposal; the Match blocks have been applied */
++	restrict_none_proposal(ssh);
++
+ 	/*
+ 	 * Tell the packet layer that authentication was successful, since
+ 	 * this information is not part of the key state.
+-- 
+2.50.0

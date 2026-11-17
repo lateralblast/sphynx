@@ -1,0 +1,223 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 43/55] clientloop, mux: give prompts the signals the loop
+ blocks
+
+client_loop() blocks HUP, INT, QUIT and TERM for the whole loop and unblocks
+them only inside ppoll(). Patch 0027 gave the commands the loop starts a clean
+mask, but the prompts it runs were left out: the "Allow shared connection?"
+questions of ControlMaster ask and auto-ask (mux.c), the ~C command line and
+the UpdateHostKeys ask. Each ran with the signals blocked, so Ctrl-C did not
+interrupt the prompt, and the askpass program started for it (SSH_ASKPASS)
+inherited the blocked mask across exec and ignored the signals.
+
+Export the swap helpers from clientloop.c and use them around those prompts;
+mux.c gets a mux_ask_permission() that wraps ask_permission().
+---
+ clientloop.c | 29 ++++++++++++++++++-----------
+ clientloop.h |  3 +++
+ mux.c        | 36 +++++++++++++++++++++++++++++-------
+ 3 files changed, 50 insertions(+), 18 deletions(-)
+
+diff --git a/clientloop.c b/clientloop.c
+index b538fdd00..2c6b78296 100644
+--- a/clientloop.c
++++ b/clientloop.c
+@@ -166,17 +166,17 @@ static int session_setup_complete;
+  */
+ static const sigset_t *loop_child_sigmask;
+ 
+-/* Give the caller the mask a child should start with; see child_sigmask_end() */
+-static int
+-child_sigmask_begin(sigset_t *saved)
++/* Give the caller the mask a child should start with; see client_sigmask_end() */
++int
++client_sigmask_begin(sigset_t *saved)
+ {
+ 	if (loop_child_sigmask == NULL)
+ 		return 0;
+ 	return sigprocmask(SIG_SETMASK, loop_child_sigmask, saved) == 0;
+ }
+ 
+-static void
+-child_sigmask_end(int swapped, const sigset_t *saved)
++void
++client_sigmask_end(int swapped, const sigset_t *saved)
+ {
+ 	if (swapped && sigprocmask(SIG_SETMASK, saved, NULL) == -1)
+ 		error_f("sigprocmask: %s", strerror(errno));
+@@ -417,10 +417,10 @@ client_x11_get_proto(struct ssh *ssh, const char *display,
+ 				channel_set_x11_refuse_time(ssh,
+ 				    x11_refuse_time);
+ 			}
+-			swapped = child_sigmask_begin(&saved_sigs);
++			swapped = client_sigmask_begin(&saved_sigs);
+ 			if (system(cmd) == 0)
+ 				generated = 1;
+-			child_sigmask_end(swapped, &saved_sigs);
++			client_sigmask_end(swapped, &saved_sigs);
+ 			free(cmd);
+ 		}
+ 
+@@ -437,9 +437,9 @@ client_x11_get_proto(struct ssh *ssh, const char *display,
+ 			    generated ? xauthfile : "",
+ 			    display);
+ 			debug2("x11_get_proto: %s", cmd);
+-			swapped = child_sigmask_begin(&saved_sigs);
++			swapped = client_sigmask_begin(&saved_sigs);
+ 			f = popen(cmd, "r");
+-			child_sigmask_end(swapped, &saved_sigs);
++			client_sigmask_end(swapped, &saved_sigs);
+ 			if (f && fgets(line, sizeof(line), f) &&
+ 			    sscanf(line, "%*s %511s %511s", proto, data) == 2)
+ 				got_data = 1;
+@@ -1031,7 +1031,10 @@ process_cmdline(struct ssh *ssh)
+ 
+ 	leave_raw_mode(options.request_tty == REQUEST_TTY_FORCE);
+ 	handler = ssh_signal(SIGINT, SIG_IGN);
++	/* a prompt must be interruptible, and its askpass must not start blocked */
++	swapped = client_sigmask_begin(&saved_sigs);
+ 	cmd = s = read_passphrase("\r\nssh> ", RP_ECHO);
++	client_sigmask_end(swapped, &saved_sigs);
+ 	if (s == NULL)
+ 		goto out;
+ 	while (isspace((u_char)*s))
+@@ -1064,9 +1067,9 @@ process_cmdline(struct ssh *ssh)
+ 
+ 	if (*s == '!' && options.permit_local_command) {
+ 		s++;
+-		swapped = child_sigmask_begin(&saved_sigs);
++		swapped = client_sigmask_begin(&saved_sigs);
+ 		ssh_local_cmd(s);
+-		child_sigmask_end(swapped, &saved_sigs);
++		client_sigmask_end(swapped, &saved_sigs);
+ 		goto out;
+ 	}
+ 
+@@ -2350,6 +2353,8 @@ update_known_hosts(struct hostkeys_update_ctx *ctx)
+ 	char *fp, *response;
+ 	size_t i;
+ 	struct stat sb;
++	sigset_t saved_sigs;
++	int swapped;
+ 
+ 	for (i = 0; i < ctx->nkeys; i++) {
+ 		if (!ctx->keys_verified[i])
+@@ -2383,8 +2388,10 @@ update_known_hosts(struct hostkeys_update_ctx *ctx)
+ 		response = NULL;
+ 		for (i = 0; !quit_pending && i < 3; i++) {
+ 			free(response);
++			swapped = client_sigmask_begin(&saved_sigs);
+ 			response = read_passphrase("Accept updated hostkeys? "
+ 			    "(yes/no): ", RP_ECHO);
++			client_sigmask_end(swapped, &saved_sigs);
+ 			if (response != NULL && strcasecmp(response, "yes") == 0)
+ 				break;
+ 			else if (quit_pending || response == NULL ||
+diff --git a/clientloop.h b/clientloop.h
+index 51c8cfb35..bdec08345 100644
+--- a/clientloop.h
++++ b/clientloop.h
+@@ -41,6 +41,9 @@ struct ssh;
+ 
+ /* Client side main loop for the interactive session. */
+ int	 client_loop(struct ssh *, int, int, int);
++/* run a prompt or a child with the signals the loop blocks unblocked; see clientloop.c */
++int	 client_sigmask_begin(sigset_t *);
++void	 client_sigmask_end(int, const sigset_t *);
+ int	 client_x11_get_proto(struct ssh *, const char *, const char *,
+ 	    u_int, u_int, char **, char **);
+ void	 client_session2_setup(struct ssh *, int, int, int,
+diff --git a/mux.c b/mux.c
+index d06fadefe..c9157a597 100644
+--- a/mux.c
++++ b/mux.c
+@@ -181,6 +181,28 @@ static const struct {
+ 	{ 0, NULL }
+ };
+ 
++/*
++ * Ask the user, from inside the client loop. The loop keeps HUP, INT, QUIT and
++ * TERM blocked, which would make the prompt uninterruptible and start its
++ * askpass program with them blocked, so give them back for the prompt.
++ */
++static int
++mux_ask_permission(const char *fmt, ...)
++{
++	va_list args;
++	char prompt[1024];
++	sigset_t saved;
++	int swapped, r;
++
++	va_start(args, fmt);
++	vsnprintf(prompt, sizeof(prompt), fmt, args);
++	va_end(args);
++	swapped = client_sigmask_begin(&saved);
++	r = ask_permission("%s", prompt);
++	client_sigmask_end(swapped, &saved);
++	return r;
++}
++
+ /* Cleanup callback fired on closure of mux client _session_ channel */
+ static void
+ mux_master_session_cleanup_cb(struct ssh *ssh, int cid, int force, void *unused)
+@@ -446,7 +468,7 @@ mux_master_process_new_session(struct ssh *ssh, u_int rid,
+ 
+ 	if (options.control_master == SSHCTL_MASTER_ASK ||
+ 	    options.control_master == SSHCTL_MASTER_AUTO_ASK) {
+-		if (!ask_permission("Allow shared connection to %s? ", host)) {
++		if (!mux_ask_permission("Allow shared connection to %s? ", host)) {
+ 			debug2_f("session refused by user");
+ 			reply_error(reply, MUX_S_PERMISSION_DENIED, rid,
+ 			    "Permission denied");
+@@ -557,7 +579,7 @@ mux_master_process_terminate(struct ssh *ssh, u_int rid,
+ 
+ 	if (options.control_master == SSHCTL_MASTER_ASK ||
+ 	    options.control_master == SSHCTL_MASTER_AUTO_ASK) {
+-		if (!ask_permission("Terminate shared connection to %s? ",
++		if (!mux_ask_permission("Terminate shared connection to %s? ",
+ 		    host)) {
+ 			debug2_f("termination refused by user");
+ 			reply_error(reply, MUX_S_PERMISSION_DENIED, rid,
+@@ -851,7 +873,7 @@ mux_master_process_open_fwd(struct ssh *ssh, u_int rid,
+ 
+ 	if (options.control_master == SSHCTL_MASTER_ASK ||
+ 	    options.control_master == SSHCTL_MASTER_AUTO_ASK) {
+-		if (!ask_permission("Open %s on %s?", fwd_desc, host)) {
++		if (!mux_ask_permission("Open %s on %s?", fwd_desc, host)) {
+ 			debug2_f("forwarding refused by user");
+ 			reply_error(reply, MUX_S_PERMISSION_DENIED, rid,
+ 			    "Permission denied");
+@@ -1073,9 +1095,9 @@ mux_master_process_stdio_fwd(struct ssh *ssh, u_int rid,
+ 	if (options.control_master == SSHCTL_MASTER_ASK ||
+ 	    options.control_master == SSHCTL_MASTER_AUTO_ASK) {
+ 		if (cport == PORT_STREAMLOCAL) {
+-			ok = ask_permission("Allow forward to path %s", chost);
++			ok = mux_ask_permission("Allow forward to path %s", chost);
+ 		} else {
+-			ok = ask_permission("Allow forward to [%s]:%d? ",
++			ok = mux_ask_permission("Allow forward to [%s]:%d? ",
+ 			    chost, cport);
+ 		}
+ 		if (!ok) {
+@@ -1163,7 +1185,7 @@ mux_master_process_stop_listening(struct ssh *ssh, u_int rid,
+ 
+ 	if (options.control_master == SSHCTL_MASTER_ASK ||
+ 	    options.control_master == SSHCTL_MASTER_AUTO_ASK) {
+-		if (!ask_permission("Disable further multiplexing on shared "
++		if (!mux_ask_permission("Disable further multiplexing on shared "
+ 		    "connection to %s? ", host)) {
+ 			debug2_f("stop listen refused by user");
+ 			reply_error(reply, MUX_S_PERMISSION_DENIED, rid,
+@@ -1195,7 +1217,7 @@ mux_master_process_proxy(struct ssh *ssh, u_int rid,
+ 
+ 	if (options.control_master == SSHCTL_MASTER_ASK ||
+ 	    options.control_master == SSHCTL_MASTER_AUTO_ASK) {
+-		if (!ask_permission("Allow multiplex proxy connection?")) {
++		if (!mux_ask_permission("Allow multiplex proxy connection?")) {
+ 			debug2_f("proxy refused by user");
+ 			reply_error(reply, MUX_S_PERMISSION_DENIED, rid,
+ 			    "Permission denied");
+-- 
+2.50.0

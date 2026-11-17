@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 30/55] packet: decide whether the MAC is enabled for each
+ direction, from its name
+
+ssh->none_mac was set by kex_choose_conf() when either direction had the none
+cipher and the none MAC, was never cleared, and ssh_set_newkeys() read it for
+both directions. A none/none result in one direction therefore switched off
+the MAC in the other, and it stayed off after a rekey that went back to a real
+cipher.
+
+ssh_set_newkeys() now enables the MAC of each direction unless that
+direction's MAC is "none" (kex_choose_conf() only chooses that with the none
+cipher after authentication), and kex_choose_conf() clears ssh->none and
+ssh->none_mac at the start of each negotiation.
+---
+ kex.c    | 4 ++++
+ packet.c | 2 +-
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/kex.c b/kex.c
+index 6315d4558..229a90a9f 100644
+--- a/kex.c
++++ b/kex.c
+@@ -1068,6 +1068,10 @@ kex_choose_conf(struct ssh *ssh, uint32_t seq)
+ 	auth_flag = packet_authentication_state(ssh);
+ 	debug("AUTH STATE IS %d", auth_flag);
+ 
++	/* these describe this negotiation, not an earlier one */
++	ssh->none = 0;
++	ssh->none_mac = 0;
++
+ 	debug2("local %s KEXINIT proposal", kex->server ? "server" : "client");
+ 	if ((r = kex_buf2prop(kex->my, NULL, &my)) != 0)
+ 		goto out;
+diff --git a/packet.c b/packet.c
+index 35472fb20..56dd0d042 100644
+--- a/packet.c
++++ b/packet.c
+@@ -1098,7 +1098,7 @@ ssh_set_newkeys(struct ssh *ssh, int mode)
+ 	/* if we are using NONE MAC then we don't need to enable the
+ 	 * mac routines. This disables them and we can claw back some cycles
+ 	 * from the CPU -cjr 3/21/2023 */
+-	if (ssh->none_mac != 1)
++	if (mac->name == NULL || strcmp(mac->name, "none") != 0)
+ 		mac->enabled = 1;
+ 
+ 	DBG(debug_f("cipher_init: %s", dir));
+-- 
+2.50.0

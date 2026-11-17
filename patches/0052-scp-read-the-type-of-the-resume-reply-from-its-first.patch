@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 51/55] scp: read the type of the resume reply from its first
+ byte
+
+After handling an R reply the source tested *cp for 'S' (skip the file) and
+'C' (send the whole file), but cp had been moved past the hash, so what it
+looked at was whatever followed the hash: a padding byte from an honest sink,
+anything at all from a malicious one. An 'S' there made the source skip the
+file, and a 'C' made it send the whole file after it had already seeked into
+it, so it read past the end and sent zeros. Look at the first byte of the
+reply, which is the type.
+---
+ scp.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index ce4cc5e73..c1f4a60d9 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1707,13 +1707,18 @@ syserr:			run_err("%s: %s", name, strerror(errno));
+ 					}
+ 				}
+ 			}
+-			if (*cp == 'S') { /* skip file */
++			/*
++			 * The record's type is its first byte. cp has moved on past
++			 * the hash if this was an R record, and what follows the
++			 * hash is padding, so it is not read as a type.
++			 */
++			if (inbuf[0] == 'S') { /* skip file */
+ #ifdef DEBUG
+ 				fprintf(stderr, "%s: Should be skipping this file\n", hostname);
+ #endif
+ 				goto next;
+ 			}
+-			if (*cp == 'C') { /*transfer entire file*/
++			if (inbuf[0] == 'C') { /*transfer entire file*/
+ #ifdef DEBUG
+ 				fprintf(stderr, "%s: Resending entire file\n", hostname);
+ #endif
+-- 
+2.50.0

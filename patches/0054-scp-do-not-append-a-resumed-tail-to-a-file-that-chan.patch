@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 53/55] scp: do not append a resumed tail to a file that
+ changed
+
+The "scp -Z" sink hashes the destination when it receives the record and
+appends the tail only when all of it has arrived, possibly much later. The
+sender had checked the first orig_size bytes against its own file, so if
+something else wrote to the destination in between, the tail went on a file
+that was no longer the one that was checked, and the result matched neither.
+
+Before appending, check that the file still has the size it had. If not,
+report it, leave the file alone and remove the temporary tail.
+---
+ scp.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/scp.c b/scp.c
+index fff4a4484..d1e1297c9 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1980,6 +1980,7 @@ resume_append(const char *tail, const char *orig, off_t orig_size, int wrerr)
+ 	char res_buf[512]; /* set at 512 just because, might want to increase*/
+ 	size_t res_bytes;
+ 	int cat_ok = 0;
++	struct stat st;
+ 
+ 	if (wrerr) {
+ 		/*
+@@ -1987,6 +1988,15 @@ resume_append(const char *tail, const char *orig, off_t orig_size, int wrerr)
+ 		 * corrupt the existing file, so leave that alone. The error
+ 		 * has already been recorded.
+ 		 */
++	} else if (stat(orig, &st) == 0 && st.st_size != orig_size) {
++		/*
++		 * The sender checked the first orig_size bytes of this file
++		 * against its own and sent the rest. The file has changed since
++		 * the sink looked at it, so the tail would not belong on it.
++		 */
++		note_err("%s: changed while it was being resumed (%lld bytes, "
++		    "was %lld); the tail was not appended", orig,
++		    (long long)st.st_size, (long long)orig_size);
+ 	} else if ((of = fopen(orig, "a")) == NULL) {
+ 		note_err("%s: could not open for appending: %s",
+ 		    orig, strerror(errno));
+-- 
+2.50.0

@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 31/55] readconf: let MetricsPath turn metrics on only where it
+ applies
+
+The MetricsPath option set options->metrics to 1 before the check that the
+block is active, and without looking at what Metrics had set. A MetricsPath in
+a Host block that did not match turned metrics on for every connection, and
+one after "Metrics no" overrode it, which breaks the rule that the first value
+wins.
+
+Turn metrics on only in an active block, and only if Metrics is still unset.
+---
+ readconf.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/readconf.c b/readconf.c
+index 8488438aa..30604a849 100644
+--- a/readconf.c
++++ b/readconf.c
+@@ -1444,7 +1444,10 @@ parse_time:
+ 
+ 	case oMetricsPath:
+ 		charptr = &options->metrics_path;
+-		options->metrics = 1;
++		/* a MetricsPath turns metrics on unless Metrics already said
++		 * otherwise, and only in a block that applies to this host */
++		if (*activep && options->metrics == -1)
++			options->metrics = 1;
+ 		goto parse_string;
+ 
+ 	case oFallback:
+-- 
+2.50.0

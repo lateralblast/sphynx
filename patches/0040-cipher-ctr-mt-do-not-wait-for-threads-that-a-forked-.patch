@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 40/55] cipher-ctr-mt: do not wait for threads that a forked
+ child does not have
+
+sshd forks a child for each session, and the child frees the connection's
+cipher before it execs the command. fork() keeps only the calling thread, so
+the pregeneration threads of the multithreaded AES-CTR cipher are not in the
+child. aes_mt_freectx() cancelled and joined them anyway, and waited for ever,
+so the second session on a connection that had switched to the multithreaded
+cipher never ran its command (a ControlMaster connection with aes256-ctr: the
+first session works, the next ones hang).
+
+Record the process that started the threads. In any other process, do not
+cancel or join them and leave their locks alone, since a thread that is not
+there may have held one at the time of the fork. The same in cipher-ctr-mt.c
+for builds without OpenSSL 3.
+---
+ cipher-ctr-mt-functions.c | 33 +++++++++++++++++++++++++++------
+ cipher-ctr-mt-functions.h |  1 +
+ cipher-ctr-mt.c           | 27 ++++++++++++++++++++-------
+ 3 files changed, 48 insertions(+), 13 deletions(-)
+
+diff --git a/cipher-ctr-mt-functions.c b/cipher-ctr-mt-functions.c
+index 1a14315d6..cac460758 100644
+--- a/cipher-ctr-mt-functions.c
++++ b/cipher-ctr-mt-functions.c
+@@ -129,6 +129,19 @@ stop_and_join_pregen_threads(struct aes_mt_ctx_st *aes_mt_ctx)
+ {
+ 	int i;
+ 
++	/*
++	 * A forked child has a copy of this context but not its threads: fork()
++	 * keeps only the calling thread. Cancelling and joining threads that
++	 * are not there waits for ever, and a lock one of them held when the
++	 * fork happened is held for good. The session child that sshd forks to
++	 * run a command has to free this context before it execs, and with a
++	 * second session on a connection that is what hung.
++	 */
++	if (aes_mt_ctx->pid != 0 && aes_mt_ctx->pid != getpid()) {
++		aes_mt_ctx->running = 0;
++		return;
++	}
++
+ 	/* notify threads that they should exit */
+ 	pthread_rwlock_wrlock(&aes_mt_ctx->stop_lock);
+ 	aes_mt_ctx->exit_flag = 1;
+@@ -387,17 +400,24 @@ void aes_mt_freectx(void *vevp_ctx)
+ 	EVP_CIPHER_CTX *evp_ctx = vevp_ctx;
+ 	struct aes_mt_ctx_st *aes_mt_ctx;
+ 	size_t used;
+-	int i;
++	int i, forked;
+ 
+ 	if ((aes_mt_ctx = EVP_CIPHER_CTX_get_app_data(evp_ctx)) != NULL) {
++		forked = aes_mt_ctx->pid != 0 && aes_mt_ctx->pid != getpid();
+ 		stop_and_join_pregen_threads(aes_mt_ctx);
+ 
+-		/* All threads are joined, so nothing can use the locks now */
+-		for (i = 0; i < aes_mt_ctx->numkq; i++) {
+-			pthread_mutex_destroy(&aes_mt_ctx->q[i].lock);
+-			pthread_cond_destroy(&aes_mt_ctx->q[i].cond);
++		/*
++		 * All threads are joined, so nothing can use the locks now. In
++		 * a forked child a lock may be held by a thread that is not
++		 * here, and destroying it is undefined, so leave them.
++		 */
++		if (!forked) {
++			for (i = 0; i < aes_mt_ctx->numkq; i++) {
++				pthread_mutex_destroy(&aes_mt_ctx->q[i].lock);
++				pthread_cond_destroy(&aes_mt_ctx->q[i].cond);
++			}
++			pthread_rwlock_destroy(&aes_mt_ctx->stop_lock);
+ 		}
+-		pthread_rwlock_destroy(&aes_mt_ctx->stop_lock);
+ 
+ 		/*
+ 		 * Clear what held key material, and keystream. The context
+@@ -521,6 +541,7 @@ int aes_mt_start_threads(void *vevp_ctx, const u_char *key,
+ 			    &aes_mt_ctx->job[i]) != 0)
+ 				fatal("AES-CTR MT Could not create thread in %s", __func__);
+ 			aes_mt_ctx->running++;
++			aes_mt_ctx->pid = getpid();
+ 			debug_f("AES-CTR MT spawned a thread with id %lu (%lu, %d)",
+ 			    aes_mt_ctx->tid[i], aes_mt_ctx->struct_id, aes_mt_ctx->id[i]);
+ 		}
+diff --git a/cipher-ctr-mt-functions.h b/cipher-ctr-mt-functions.h
+index 50eb90b42..2643c37e1 100644
+--- a/cipher-ctr-mt-functions.h
++++ b/cipher-ctr-mt-functions.h
+@@ -115,6 +115,7 @@ struct aes_mt_ctx_st {
+ 	int                     threads;  /* pregen threads to start */
+ 	int                     numkq;    /* keystream queues: threads + 1 */
+ 	int                     running;  /* threads started and not yet joined */
++	pid_t                   pid;      /* process that started them */
+ 	int		        state;
+ 	int		        qidx;
+ 	int		        ridx;
+diff --git a/cipher-ctr-mt.c b/cipher-ctr-mt.c
+index 75abb54fb..4291dc8d5 100644
+--- a/cipher-ctr-mt.c
++++ b/cipher-ctr-mt.c
+@@ -159,6 +159,7 @@ struct ssh_aes_ctr_ctx_mt
+ 	 * starts; freed by stop_and_join after the thread has been joined. */
+ 	EVP_CIPHER_CTX *evp[MAX_THREADS];
+ 	struct pregen_job job[MAX_THREADS];
++	pid_t pid; /* process that started the threads */
+ 	struct kq q[MAX_NUMKQ]; /* 33 */
+ #ifdef __APPLE__
+ 	pthread_rwlock_t stop_lock;
+@@ -230,6 +231,13 @@ stop_and_join_pregen_threads(struct ssh_aes_ctr_ctx_mt *c)
+ {
+ 	int i;
+ 
++	/* A forked child has this context but not its threads, and joining them
++	 * waits for ever; see the same test in cipher-ctr-mt-functions.c */
++	if (c->pid != 0 && c->pid != getpid()) {
++		c->running = 0;
++		return;
++	}
++
+ #ifdef __APPLE__
+ 	/* notify threads that they should exit */
+ 	pthread_rwlock_wrlock(&c->stop_lock);
+@@ -619,6 +627,7 @@ ssh_aes_ctr_init(EVP_CIPHER_CTX *ctx, const u_char *key, const u_char *iv,
+ 			if (pthread_create(&c->tid[i], &attr, thread_loop, &c->job[i]) != 0)
+ 				fatal("AES-CTR MT Could not create thread in %s", __func__);
+ 			c->running++;
++			c->pid = getpid();
+ 		}
+ 		pthread_attr_destroy(&attr);
+ 
+@@ -635,19 +644,23 @@ static int
+ ssh_aes_ctr_cleanup(EVP_CIPHER_CTX *ctx)
+ {
+ 	struct ssh_aes_ctr_ctx_mt *c;
+-	int i;
++	int i, forked;
+ 
+ 	if ((c = EVP_CIPHER_CTX_get_app_data(ctx)) != NULL) {
++		forked = c->pid != 0 && c->pid != getpid();
+ 		stop_and_join_pregen_threads(c);
+ 
+-		/* All threads are joined, so nothing can use the locks now */
+-		for (i = 0; i < c->numkq; i++) {
+-			pthread_mutex_destroy(&c->q[i].lock);
+-			pthread_cond_destroy(&c->q[i].cond);
+-		}
++		/* All threads are joined, so nothing can use the locks now. In a
++		 * forked child they may be held by a thread that is not here. */
++		if (!forked) {
++			for (i = 0; i < c->numkq; i++) {
++				pthread_mutex_destroy(&c->q[i].lock);
++				pthread_cond_destroy(&c->q[i].cond);
++			}
+ #ifdef __APPLE__
+-		pthread_rwlock_destroy(&c->stop_lock);
++			pthread_rwlock_destroy(&c->stop_lock);
+ #endif /* __APPLE__ */
++		}
+ 
+ 		explicit_bzero(c, sizeof(*c));
+ 		free(c);
+-- 
+2.50.0

@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 54/55] scp: hash the file the source sends from, not the one
+ the name refers to
+
+The "scp -Z" source opened the file, took its size from fstat(), and then
+hashed it by name with calculate_hash(), which opens the name again. If the
+name was replaced in between (a log rotated, a temporary file renamed over it)
+the hash that was compared with the destination's, and the bytes that were then
+sent, came from different files.
+
+Add calculate_hash_fd(), which hashes the open descriptor with pread() and so
+leaves its position alone, and use it for both hashes in the source.
+calculate_hash() opens the name and calls it, for the sink.
+---
+ scp.c | 58 +++++++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 41 insertions(+), 17 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index d1e1297c9..62ea45808 100644
+--- a/scp.c
++++ b/scp.c
+@@ -467,6 +467,7 @@ void tolocal(int, char *[], enum scp_mode_e, char *sftp_direct);
+ void toremote(int, char *[], enum scp_mode_e, char *sftp_direct);
+ void usage(void);
+ void calculate_hash(char *, char *, off_t); /*get the hash of file to length*/
++void calculate_hash_fd(int, char *, off_t); /* the same, of an open file */
+ void rand_str(char *, size_t); /*gen randome char string */
+ 
+ void source_sftp(int, char *, char *, struct sftp_conn *);
+@@ -1360,7 +1361,13 @@ tolocal(int argc, char **argv, enum scp_mode_e mode, char *sftp_direct)
+  * Note: LibreSSL doesn't support blake2b512 so we can't offer them
+  * the resume feature cjr 7/18/2023 */
+ #if (defined WITH_OPENSSL) && !defined(LIBRESSL_VERSION_NUMBER)
+-void calculate_hash(char *filename, char *output, off_t length)
++/*
++ * Hash the first length bytes of the open file fd, reading with pread() so the
++ * file's position is not touched. The source uses this on the descriptor it
++ * sends from, so the hash is of the file that is sent and not of whatever the
++ * name refers to by then.
++ */
++void calculate_hash_fd(int fd, char *output, off_t length)
+ {
+ 	int n, ok = 0;
+ 	unsigned int md_len = 0;
+@@ -1368,8 +1375,9 @@ void calculate_hash(char *filename, char *output, off_t length)
+ 	const EVP_MD *md;
+ 	char buf[HASH_BUFLEN];
+ 	unsigned char out[EVP_MAX_MD_SIZE];
+-	FILE *file_ptr;
+-	size_t want, got;
++	size_t want;
++	ssize_t got;
++	off_t off = 0;
+ 
+ 	/*
+ 	 * The protocol carries the hash in a fixed-width field, so the output
+@@ -1380,14 +1388,6 @@ void calculate_hash(char *filename, char *output, off_t length)
+ 	memset(output, '0', HASH_LEN);
+ 	output[HASH_LEN] = '\0';
+ 
+-	/* open file for calculating hash */
+-	file_ptr = fopen(filename, "r");
+-	if (file_ptr == NULL) {
+-		if (verbose_mode)
+-			fprintf(stderr, "%s: error opening file %s\n", hostname, filename);
+-		return;
+-	}
+-
+ 	if ((md = EVP_get_digestbyname("blake2b512")) == NULL ||
+ 	    (c = EVP_MD_CTX_new()) == NULL ||
+ 	    EVP_DigestInit_ex(c, md, NULL) != 1)
+@@ -1395,14 +1395,17 @@ void calculate_hash(char *filename, char *output, off_t length)
+ 
+ 	while (length > 0) {
+ 		want = length > HASH_BUFLEN ? HASH_BUFLEN : (size_t)length;
+-		got = fread(buf, 1, want, file_ptr);
++		got = pread(fd, buf, want, off);
++		if (got == -1 && errno == EINTR)
++			continue;
+ 		/* A short read means the file is shorter than requested, or a
+ 		 * read error. Either way these bytes cannot be hashed. */
+-		if (got != want)
++		if (got != (ssize_t)want)
+ 			goto out;
+ 		if (EVP_DigestUpdate(c, buf, got) != 1)
+ 			goto out;
+ 		length -= got;
++		off += got;
+ 	}
+ 	if (EVP_DigestFinal_ex(c, out, &md_len) != 1 ||
+ 	    md_len * 2 != HASH_LEN)
+@@ -1420,16 +1423,37 @@ void calculate_hash(char *filename, char *output, off_t length)
+ 		output[HASH_LEN] = '\0';
+ 	}
+ 	EVP_MD_CTX_free(c);
+-	fclose(file_ptr);
+ }
+-#else
++
+ void calculate_hash(char *filename, char *output, off_t length)
++{
++	int fd;
++
++	memset(output, '0', HASH_LEN);
++	output[HASH_LEN] = '\0';
++
++	/* open file for calculating hash */
++	if ((fd = open(filename, O_RDONLY)) == -1) {
++		if (verbose_mode)
++			fprintf(stderr, "%s: error opening file %s\n", hostname, filename);
++		return;
++	}
++	calculate_hash_fd(fd, output, length);
++	close(fd);
++}
++#else
++void calculate_hash_fd(int fd, char *output, off_t length)
+ {
+ 	/* Builds without openssl, or with libressl, cannot hash. Keep the
+ 	 * fixed-width field valid anyway. */
+ 	memset(output, '0', HASH_LEN);
+ 	output[HASH_LEN] = '\0';
+ }
++
++void calculate_hash(char *filename, char *output, off_t length)
++{
++	calculate_hash_fd(-1, output, length);
++}
+ #endif /* WITH_OPENSSL */
+ 
+ #define TYPE_OVERFLOW(type, val) \
+@@ -1569,7 +1593,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
+ 		case S_IFREG:
+ 			/* only calculate hash if we are in resume mode and a file*/
+ 			if (resume_flag) {
+-				calculate_hash(name, hashsum, stb.st_size);
++				calculate_hash_fd(fd, hashsum, stb.st_size);
+ #ifdef DEBUG
+ 				fprintf(stderr, "%s: Name is '%s' and hash '%s'\n", hostname, name, hashsum);
+ 				fprintf (stderr,"%s: size of %s is %ld\n", hostname, name, stb.st_size);
+@@ -1675,7 +1699,7 @@ syserr:			run_err("%s: %s", name, strerror(errno));
+ 					fprintf (stderr, "%s: received size of %ld\n", hostname, insize);
+ #endif
+ 					/*get the hash of the source file to the byte length we just got*/
+-					calculate_hash(name, test_hashsum, insize);
++					calculate_hash_fd(fd, test_hashsum, insize);
+ #ifdef DEBUG
+ 					fprintf(stderr, "%s: calculated hashsum of local %s to %ld is %s\n",
+ 						hostname, last, insize, test_hashsum);
+-- 
+2.50.0

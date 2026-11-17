@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 49/55] mux: refuse a terminal over a connection that uses the
+ none cipher
+
+The none switch is only made when the session has no terminal, because what
+is typed would go over the network in clear text. A control master started with
+NoneSwitch yes and -N has no terminal, so it switches, and a later session
+shared over it with -t or -tt got a terminal on the none cipher.
+
+Refuse a terminal request in mux_master_process_new_session() while the
+connection uses the none cipher. The client then makes a connection of its own,
+which is encrypted.
+---
+ mux.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/mux.c b/mux.c
+index c9157a597..a37571f18 100644
+--- a/mux.c
++++ b/mux.c
+@@ -476,6 +476,18 @@ mux_master_process_new_session(struct ssh *ssh, u_int rid,
+ 		}
+ 	}
+ 
++	/*
++	 * The none cipher is only switched to when the session has no terminal,
++	 * since what is typed would go in clear. A session shared over this
++	 * connection is no different, so refuse a terminal on it.
++	 */
++	if (cctx->want_tty && ssh->none) {
++		debug2_f("terminal refused: the connection uses the none cipher");
++		reply_error(reply, MUX_S_PERMISSION_DENIED, rid,
++		    "A terminal is not allowed on a connection that uses the none cipher");
++		goto cleanup;
++	}
++
+ 	/* Try to pick up ttymodes from client before it goes raw */
+ 	if (cctx->want_tty && tcgetattr(new_fd[0], &cctx->tio) == -1)
+ 		error_f("tcgetattr: %s", strerror(errno));
+-- 
+2.50.0

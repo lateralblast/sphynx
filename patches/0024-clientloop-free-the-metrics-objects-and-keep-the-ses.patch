@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 24/55] clientloop: free the metrics objects and keep the
+ session if a file cannot be written
+
+client_process_request_metrics() ran on every poll (every 5 s by default) and
+never freed the binn object it built for the local metrics, so each poll leaked
+a buffer. It also leaked the local metrics file when getsockopt() failed, ended
+the whole session with fatal() when MetricsPath could not be opened, and filled
+the output string from a malloc(1024) that was not zeroed, so a bad object could
+leave garbage to be printed.
+
+Free the object and close the file on every path, zero the string (and have
+metrics_read_binn_object() leave it empty when it has nothing to read), and
+report a file that cannot be opened once instead of calling fatal().
+---
+ clientloop.c | 37 ++++++++++++++++++++++++++++---------
+ metrics.c    |  3 +++
+ 2 files changed, 31 insertions(+), 9 deletions(-)
+
+diff --git a/clientloop.c b/clientloop.c
+index eaf729c10..fc8552f6d 100644
+--- a/clientloop.c
++++ b/clientloop.c
+@@ -2729,7 +2729,8 @@ client_process_request_metrics (struct ssh *ssh, int type, u_int32_t seq, void *
+ 	struct tcp_info local_tcp_info;
+ 	const u_char *blob = NULL;
+ 	FILE *remfptr;
+-	FILE *localfptr;
++	FILE *localfptr = NULL;
++	static int remote_open_failed, local_open_failed;
+ 	char remfilename[1024];
+ 	char localfilename[1024];
+ 	time_t now;
+@@ -2744,8 +2745,12 @@ client_process_request_metrics (struct ssh *ssh, int type, u_int32_t seq, void *
+ 	info = localtime(&now);
+ 	strftime(timestamp, 40, "%d-%m-%Y %H:%M:%S", info);
+ 
+-	/* malloc the string 1KB should be large enough */
+-	metricsstring = malloc(1024);
++	/* the string 1KB should be large enough. It is zeroed so that it is
++	 * empty, and not garbage, if the object it is filled from is bad */
++	if ((metricsstring = calloc(1, 1024)) == NULL) {
++		error_f("could not allocate the metrics string");
++		return;
++	}
+ 
+ 	/* get the local socket information */
+ 	int sock_in = ssh_packet_get_connection_in(ssh);
+@@ -2775,8 +2780,14 @@ client_process_request_metrics (struct ssh *ssh, int type, u_int32_t seq, void *
+ 
+ 	/* open the file handle to write the remote data*/
+ 	remfptr = fopen(remfilename, "a");
+-	if (remfptr == NULL)
+-		fatal("Error opening %s: %s", remfilename, strerror(errno));
++	if (remfptr == NULL) {
++		/* a metrics file that cannot be written is not worth
++		 * ending the session for. Say so once, not every poll */
++		if (!remote_open_failed)
++			error("Error opening %s: %s", remfilename, strerror(errno));
++		remote_open_failed = 1;
++		goto localonly;
++	}
+ 
+ 	/* read the entire packet string into blob
+ 	 * blob has to be a const uchar as that's what string_direct expects
+@@ -2823,13 +2834,18 @@ localonly:
+ #else
+ 	/* open file handle for local data */
+ 	localfptr = fopen(localfilename, "a");
+-	if(localfptr == NULL)
+-		fatal("Error opening %s: %s", localfilename, strerror(errno));
++	if (localfptr == NULL) {
++		if (!local_open_failed)
++			error("Error opening %s: %s", localfilename, strerror(errno));
++		local_open_failed = 1;
++		goto out;
++	}
+ 
+ 	/* create the binn object*/
+ 	metricsobj = binn_object();
+ 	if (metricsobj == NULL) {
+-		fatal("Could not create metrics object");
++		error("Could not create metrics object");
++		goto out;
+ 	}
+ 
+ 	tcpi_len = (size_t)sizeof(local_tcp_info);
+@@ -2856,9 +2872,12 @@ localonly:
+ 
+ 	fprintf(localfptr, "%s, ", timestamp);
+ 	fprintf(localfptr, "%s\n", metricsstring);
+-	fclose (localfptr);
+ #endif /* TCP_INFO */
+ out:
++	if (localfptr != NULL)
++		fclose(localfptr);
++	if (metricsobj != NULL)
++		binn_free(metricsobj);
+ 	free(metricsstring);
+ }
+ 
+diff --git a/metrics.c b/metrics.c
+index 4042530b1..111fc3c08 100644
+--- a/metrics.c
++++ b/metrics.c
+@@ -268,6 +268,9 @@ metrics_read_binn_object (void *binnobj, char *output) {
+ 	int len = 0;
+ 	int buflen = 1023;
+ 	int kernel_version = 0;
++	/* leave the caller an empty string, not whatever was in its buffer, if
++	 * there is nothing to format */
++	output[0] = '\0';
+ 	if (binnobj == NULL) {
+ 		fprintf(stderr, "Metric polling returned bad data.\n");
+ 		return;
+-- 
+2.50.0

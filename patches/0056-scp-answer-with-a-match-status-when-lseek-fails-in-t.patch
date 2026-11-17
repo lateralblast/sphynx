@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 55/55] scp: answer with a match status when lseek fails in the
+ -Z source
+
+After a hash match the source seeks the open file to the end of the part the
+sink already has. If that lseek failed it jumped to the next file without
+sending the match status the sink was waiting for, so the first byte of the
+next file's record was read as the status and the sink lost its place.
+
+Treat a failed seek as a mismatch: reset the position, say "F" and send the
+whole file, which the sink handles like any other mismatch.
+---
+ scp.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/scp.c b/scp.c
+index 62ea45808..bdaea6a6f 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1717,9 +1717,18 @@ syserr:			run_err("%s: %s", name, strerror(errno));
+ #ifdef DEBUG
+ 							fprintf(stderr, "%s: lseek did not return %ld\n", hostname, insize) ;
+ #endif
+-							goto next;
+-						}
+-						match = "M";
++							/*
++							 * The sink is waiting for the match status, so
++							 * moving on to the next file here would make
++							 * the next record's first byte the status.
++							 * Say the fragments differ, and send the whole
++							 * file from the start.
++							 */
++							(void) lseek(fd, 0, SEEK_SET);
++							match = "F";
++							xfer_size = stb.st_size;
++						} else
++							match = "M";
+ 					} else {
+ 						/* the fragments don't match so we should start over from the begining */
+ #ifdef DEBUG
+-- 
+2.50.0

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 37/55] sshconnect: name the port in the connect failure
+ message
+
+ssh_connect_direct() printed "ssh: connect to host H port %s: reason" with
+strport, which only the loop over addresses fills in. With HappyEyes yes that
+loop does not run, so every failure said "port : reason". Print the port that
+was asked for.
+---
+ sshconnect.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/sshconnect.c b/sshconnect.c
+index 9163f1808..989d4ad18 100644
+--- a/sshconnect.c
++++ b/sshconnect.c
+@@ -601,8 +601,9 @@ ssh_connect_direct(struct ssh *ssh, const char *host, struct addrinfo *aitop,
+ 
+ 	/* Return failure if we didn't get a successful connection. */
+ 	if (sock == -1) {
+-		error("ssh: connect to host %s port %s: %s",
+-		    host, strport, errno == 0 ? "failure" : strerror(errno));
++		/* strport is only set by the loop above, not by happy eyeballs */
++		error("ssh: connect to host %s port %d: %s",
++		    host, (int)port, errno == 0 ? "failure" : strerror(errno));
+ 		return -1;
+ 	}
+ 
+-- 
+2.50.0

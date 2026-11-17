@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 48/55] scp: keep in step when the sink cannot open the target,
+ with -Z
+
+In resume mode the sink sends its reply, the ready byte and reads the match
+status before it opens the target, so by the time open() can fail the sender
+has been told to go ahead and is sending the file. The sink reported the error
+and went on to the next record, and read the file's bytes as control records:
+"protocol error: expected control record", or worse if the data looked like a
+record. open() fails when a directory is in the way, when the name is too long
+for the temporary file, or when the directory cannot be written.
+
+Read and drop the bytes the sender is sending, and its closing NUL, before
+reporting the error, which then takes the place of the success byte as it does
+without -Z.
+---
+ scp.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/scp.c b/scp.c
+index 43bae70bf..bec86fafa 100644
+--- a/scp.c
++++ b/scp.c
+@@ -1943,6 +1943,25 @@ out:
+ 	 (sizeof(type) != 4 && sizeof(type) != 8))
+ 
+ 
++/*
++ * Read and drop the n bytes of a file the sender is sending, and the NUL that
++ * ends it. See the use in sink().
++ */
++static void
++resume_discard(off_t n)
++{
++	char junk[16384];
++	size_t chunk;
++
++	while (n > 0) {
++		chunk = n > (off_t)sizeof(junk) ? sizeof(junk) : (size_t)n;
++		if (atomicio(read, remin, junk, chunk) != chunk)
++			return;
++		n -= chunk;
++	}
++	(void) atomicio(read, remin, junk, 1);
++}
++
+ void
+ sink(int argc, char **argv, const char *src)
+ {
+@@ -1967,6 +1986,7 @@ sink(int argc, char **argv, const char *src)
+ 	char match = 0;
+ 	int bad_match_flag = 0;
+ 	int nonreg = 0;	/* resume mode: the target exists and is not a regular file */
++	int oerrno;
+ 	np = NULL; /* this was originally '/0' but that's wrong */
+ 	np_tmp = NULL;
+ 	np_rand = NULL;
+@@ -2447,6 +2467,17 @@ sink(int argc, char **argv, const char *src)
+ #endif
+ 		/* the temporary resume file must be new: never follow or reuse an existing name */
+ 		if ((ofd = open(np, O_WRONLY|O_CREAT|(np == np_rand ? O_EXCL : 0), mode)) == -1) {
++			/*
++			 * In resume mode the reply, the ready byte and the match
++			 * status have all been exchanged by now, so the sender is
++			 * already sending the file. Take its bytes and its closing
++			 * NUL, or they would be read as control records, and then
++			 * report the error in place of the success byte.
++			 */
++			oerrno = errno;
++			if (resume_flag)
++				resume_discard(xfer_size);
++			errno = oerrno;
+ bad:			run_err("%s: %s", np, strerror(errno));
+ 			continue;
+ 		}
+-- 
+2.50.0

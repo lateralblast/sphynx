@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 42/55] servconf: show DisableMTAES in sshd -T
+
+dump_config() listed HPNDisabled, TcpRcvBufPoll, NoneEnabled, NoneMacEnabled
+and UseMPTCP but not DisableMTAES, so "sshd -T" did not show whether it was
+set.
+---
+ servconf.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/servconf.c b/servconf.c
+index 06bba219a..619e3b489 100644
+--- a/servconf.c
++++ b/servconf.c
+@@ -4424,6 +4424,7 @@ dump_config(ServerOptions *o)
+ 	dump_cfg_fmtint(sTcpRcvBufPoll, o->tcp_rcv_buf_poll);
+ 	dump_cfg_fmtint(sNoneEnabled, o->none_enabled);
+ 	dump_cfg_fmtint(sNoneMacEnabled, o->nonemac_enabled);
++	dump_cfg_fmtint(sDisableMTAES, o->disable_multithreaded);
+ 	dump_cfg_fmtint(sUseMPTCP, o->use_mptcp);
+ 	dump_cfg_fmtint(sWarnWeakCrypto, o->warn_weak_crypto);
+ 	dump_cfg_fmtint(sRefuseConnection, o->refuse_connection);
+-- 
+2.50.0

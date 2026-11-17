@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 26/55] ssh: try the fallback port once
+
+When the connection to the default port (2222) fails, hpnssh retries on
+FallbackPort. If FallbackPort was set to the default port, the test that
+decides whether to fall back (port == default port) was true again after the
+switch, so a failed connect looped for ever, and each pass leaked the
+addresses it had resolved.
+
+Fall back at most once, and free the addresses before resolving the new ones.
+---
+ ssh.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/ssh.c b/ssh.c
+index ae842cecc..7e8d72d90 100644
+--- a/ssh.c
++++ b/ssh.c
+@@ -641,6 +641,7 @@ main(int ac, char **av)
+ 	extern char *optarg;
+ 	struct Forward fwd;
+ 	struct addrinfo *addrs = NULL;
++	int fallback_tried;
+ 	size_t n, len;
+ 	u_int j;
+ 	struct utsname utsname;
+@@ -1736,14 +1737,19 @@ main(int ac, char **av)
+ 	 * if that fails we reset the port to SSH_DEFAULT_PORT
+ 	 * -cjr 8/17/2022
+ 	 */
++	fallback_tried = 0;
+ tryagain:
+ 	if (ssh_connect(ssh, host, options.host_arg, addrs, &hostaddr,
+ 	    options.port, options.connection_attempts,
+ 	    &timeout_ms, options.tcp_keep_alive) != 0) {
+ 		/* could not connect. If the port requested is the same as
+ 		 * hpnssh default port then fallback. Otherwise, exit */
+-		if ((options.port == default_ssh_port()) && options.fallback) {
++		if ((options.port == default_ssh_port()) && options.fallback &&
++		    !fallback_tried) {
+ 			int port = options.fallback_port;
++			/* once only: with FallbackPort set to the default
++			 * port this would otherwise try the same port for ever */
++			fallback_tried = 1;
+ 			options.port = port;
+ 			fprintf(stderr, "HPNSSH server not available on default port %d\n",
+ 				default_ssh_port());
+@@ -1753,6 +1759,8 @@ tryagain:
+ 			else
+ 				fprintf(stderr, "Falling back to user defined port %d\n",
+ 					port);
++			if (addrs != NULL)
++				freeaddrinfo(addrs);
+ 			addrs = resolve_host(host, port, 1,
+ 					     cname, sizeof(cname));
+ 			goto tryagain;
+-- 
+2.50.0

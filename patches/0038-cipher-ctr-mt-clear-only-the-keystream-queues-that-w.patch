@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 38/55] cipher-ctr-mt: clear only the keystream queues that
+ were used
+
+Each cipher context holds room for MAX_NUMKQ queues of 512 KiB (about 17 MB)
+but a connection uses numkq of them, 2 with the default of one thread. The
+context is calloc()ed, so the unused queues are untouched zero pages, but
+aes_mt_freectx() passed the whole structure to explicit_bzero(), which touched
+every one of them each time a cipher was freed.
+
+Clear the part before the queues, the queues in use, and the part after them.
+---
+ cipher-ctr-mt-functions.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/cipher-ctr-mt-functions.c b/cipher-ctr-mt-functions.c
+index bd538c37e..1a14315d6 100644
+--- a/cipher-ctr-mt-functions.c
++++ b/cipher-ctr-mt-functions.c
+@@ -29,6 +29,8 @@
+ #include <stdarg.h>
+ #include <string.h>
+ #include <openssl/evp.h>
++#include <stddef.h>
++
+ #include "xmalloc.h"
+ #include <unistd.h>
+ #include "cipher-ctr-mt-functions.h"
+@@ -384,6 +386,7 @@ void aes_mt_freectx(void *vevp_ctx)
+ {
+ 	EVP_CIPHER_CTX *evp_ctx = vevp_ctx;
+ 	struct aes_mt_ctx_st *aes_mt_ctx;
++	size_t used;
+ 	int i;
+ 
+ 	if ((aes_mt_ctx = EVP_CIPHER_CTX_get_app_data(evp_ctx)) != NULL) {
+@@ -396,7 +399,17 @@ void aes_mt_freectx(void *vevp_ctx)
+ 		}
+ 		pthread_rwlock_destroy(&aes_mt_ctx->stop_lock);
+ 
+-		explicit_bzero(aes_mt_ctx, sizeof(*aes_mt_ctx));
++		/*
++		 * Clear what held key material, and keystream. The context
++		 * has room for MAX_NUMKQ queues of 512 KiB (17 MB) but only
++		 * numkq were used, and the rest are still the zero pages
++		 * calloc() gave us: clearing them would touch every one.
++		 */
++		used = aes_mt_ctx->numkq * sizeof(aes_mt_ctx->q[0]);
++		explicit_bzero(aes_mt_ctx, offsetof(struct aes_mt_ctx_st, q));
++		explicit_bzero(aes_mt_ctx->q, used);
++		explicit_bzero((u_char *)aes_mt_ctx + offsetof(struct aes_mt_ctx_st, stop_lock),
++		    sizeof(*aes_mt_ctx) - offsetof(struct aes_mt_ctx_st, stop_lock));
+ 		free(aes_mt_ctx);
+ 		EVP_CIPHER_CTX_set_app_data(evp_ctx, NULL);
+ 	}
+-- 
+2.50.0

@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 44/55] clientloop, serverloop: clear tcp_info before asking
+ the kernel for it
+
+Both metrics paths passed a struct tcp_info that was not cleared, and the
+client passed a size_t cast to socklen_t *. The kernel copies only as many
+bytes as it and the caller both know, so a kernel with a shorter tcp_info than
+the libc header left the tail as it was on the stack, and that was written
+into the metrics file (client) and sent to the client in the stack-metrics
+reply (server). On a big-endian 64-bit host the size_t cast made the kernel
+read the high half of the length, which is 0, and copy nothing.
+
+Clear the struct and use a real socklen_t.
+---
+ clientloop.c | 9 ++++++---
+ serverloop.c | 6 ++++--
+ 2 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/clientloop.c b/clientloop.c
+index 2c6b78296..84ebf25f8 100644
+--- a/clientloop.c
++++ b/clientloop.c
+@@ -2778,7 +2778,8 @@ client_process_request_metrics (struct ssh *ssh, int type, u_int32_t seq, void *
+ 	struct tm *info;
+ 	char timestamp[40];
+ 	char *metricsstring = NULL;
+-	size_t tcpi_len, len = 0;
++	socklen_t tcpi_len;
++	size_t len = 0;
+ 	binn *metricsobj = NULL;
+ 	int r, kernel_version = 0;
+ 
+@@ -2889,9 +2890,11 @@ localonly:
+ 		goto out;
+ 	}
+ 
+-	tcpi_len = (size_t)sizeof(local_tcp_info);
++	/* the kernel fills in only what it knows, and tcpi_len is the length it sees */
++	memset(&local_tcp_info, 0, sizeof(local_tcp_info));
++	tcpi_len = sizeof(local_tcp_info);
+ 	if ((r = getsockopt(sock_in, IPPROTO_TCP, TCP_INFO, (void *)&local_tcp_info,
+-			    (socklen_t *)&tcpi_len)) != 0){
++			    &tcpi_len)) != 0){
+ 		error("Could not read tcp_info from socket");
+ 		goto out;
+ 	}
+diff --git a/serverloop.c b/serverloop.c
+index b93e2dfe1..fde90f125 100644
+--- a/serverloop.c
++++ b/serverloop.c
+@@ -698,12 +698,14 @@ server_input_metrics_request(struct ssh *ssh, struct sshbuf **respp)
+ #else
+         struct tcp_info tcp_info;
+ 	struct sshbuf *resp = NULL;
+-	int tcp_info_len;
++	socklen_t tcp_info_len;
+ 	/* this is the socket of the current connection */
+ 	int sock_in = ssh_packet_get_connection_in(ssh);
+ 	int r;
+ 	binn *metricsobj;
+ 
++	/* the kernel fills in only what it knows; do not send the rest as it is on the stack */
++	memset(&tcp_info, 0, sizeof(tcp_info));
+ 	tcp_info_len = sizeof(tcp_info); /*expect around 330 bytes */
+ 	if ((resp = sshbuf_new()) == NULL)
+ 		fatal_f("sshbuf_new");
+@@ -717,7 +719,7 @@ server_input_metrics_request(struct ssh *ssh, struct sshbuf **respp)
+ 
+ 	debug("Stack metrics request for connection %d", sock_in);
+ 	if ((r = getsockopt(sock_in, IPPROTO_TCP, TCP_INFO, (void *)&tcp_info,
+-			   (socklen_t *)&tcp_info_len)) != 0) {
++			   &tcp_info_len)) != 0) {
+ 		error_f("Could not read tcp_info from socket");
+ 		goto out;
+ 	}
+-- 
+2.50.0

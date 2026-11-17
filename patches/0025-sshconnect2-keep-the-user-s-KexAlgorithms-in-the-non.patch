@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Thu, 5 Nov 2026 12:00:00 +1100
+Subject: [PATCH 25/55] sshconnect2: keep the user's KexAlgorithms in the none
+ switch rekey
+
+The rekey that switches to the none cipher after authentication built its
+proposal with kex_proposal_populate_entries() and a NULL KexAlgorithms, so the
+client's KexAlgorithms setting was dropped and the built-in list was used: a
+client set to curve25519-sha256 rekeyed with mlkem768x25519-sha256. With NoneMac
+the function ran a second time on the same array, which leaked the first set of
+strings, and the strings were never freed.
+
+Pass options.kex_algorithms, choose the MAC once, populate the proposal once
+and free it after it has been put in the buffer.
+---
+ sshconnect2.c | 25 +++++++++++--------------
+ 1 file changed, 11 insertions(+), 14 deletions(-)
+
+diff --git a/sshconnect2.c b/sshconnect2.c
+index a28d56a8c..1060f1b62 100644
+--- a/sshconnect2.c
++++ b/sshconnect2.c
+@@ -494,26 +494,23 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
+ 	 */
+ 	if (options.none_switch == 1 && options.none_enabled == 1) {
+ 		char *myproposal[PROPOSAL_MAX];
+-		char *s = NULL;
+ 		const char *none_cipher = "none";
+ 		if (!tty_flag) { /* no null on tty sessions */
++			/* NONEMAC can only be used in context of the NONE CIPHER */
++			const char *macs = options.nonemac_enabled == 1 ?
++			    "none" : options.macs;
++
+ 			debug("Requesting none rekeying...");
+-			kex_proposal_populate_entries(ssh, myproposal, s, none_cipher,
+-						      options.macs,
+-						      compression_alg_list(options.compression),
+-						      options.hostkeyalgorithms);
++			/* keep the user's KexAlgorithms; only the cipher and MAC change */
++			kex_proposal_populate_entries(ssh, myproposal,
++			    options.kex_algorithms, none_cipher, macs,
++			    compression_alg_list(options.compression),
++			    options.hostkeyalgorithms);
+ 			fprintf(stderr, "WARNING: ENABLED NONE CIPHER!!!\n");
+-
+-			/* NONEMAC can only be used in context of the NONE CIPHER */
+-			if (options.nonemac_enabled == 1) {
+-				const char *none_mac = "none";
+-				kex_proposal_populate_entries(ssh, myproposal, s, none_cipher,
+-							      none_mac,
+-							      compression_alg_list(options.compression),
+-							      options.hostkeyalgorithms);
++			if (options.nonemac_enabled == 1)
+ 				fprintf(stderr, "WARNING: ENABLED NONE MAC\n");
+-			}
+ 			kex_prop2buf(ssh->kex->my, myproposal);
++			kex_proposal_free_entries(myproposal);
+ 			packet_request_rekeying();
+ 		} else {
+ 			/* requested NONE cipher when in a tty */
+-- 
+2.50.0
