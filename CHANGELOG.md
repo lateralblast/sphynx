@@ -4,6 +4,12 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.2.9] - 2026-11-17
+
+### Changed
+
+- `sphynx-ssh/`'s git history now holds the move to OpenSSH master: the rebased tree is committed on branch `rebase-10.6p2` and contains the base commit `e651bed9f`, so `tools/patches.sh check` passes from the committed state and on a fresh clone. No code changed; the release string is `..._sphynx1.2.9`.
+
 ## [1.2.8] - 2026-11-17
 
 ### Fixed

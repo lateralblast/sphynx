@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 1.2.8
+Version: 1.2.9
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -778,7 +778,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0014 | `scp`: check the hash field length and make `calculate_hash` fixed width. | 0.2.9 | yes |
 | 0015 | `scp`: release per-file resume state at the top of the loop. | 0.3.0 | yes |
 | 0016 | `channels`: arm the input fd only when it can be read. Fixes the client and server spinning at full CPU on long paths. | 0.3.4 | yes |
-| 0017 | `version`: add the sphynx version, and the date of the OpenSSH commit it is built on, to the release string. | 0.0.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8 | fork only |
+| 0017 | `version`: add the sphynx version, and the date of the OpenSSH commit it is built on, to the release string. | 0.0.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9 | fork only |
 | 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
 | 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
 | 0020 | `cipher-ctr-mt-provider`: read the cipher state through the `EVP_CIPHER_CTX`, which fixes a crash with OpenSSL 4.1. | 0.5.3 | self-contained |
