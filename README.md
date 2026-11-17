@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 1.2.4
+Version: 1.2.5
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -35,7 +35,7 @@ sudo apt-get install -y autoconf automake make gcc dpkg-dev \
 sudo apt install ./dist/hpn-ssh_*.deb
 ```
 
-On Ubuntu 26.04 this produces `dist/hpn-ssh_10.6p1+snapshot20261103+hpn18.12.0+sphynx<version>-1~resolute1_<arch>.deb`.
+On Ubuntu 26.04 this produces `dist/hpn-ssh_10.6p2+snapshot20261116+hpn18.12.0+sphynx<version>-1~resolute1_<arch>.deb`.
 
 ## Command reference
 
@@ -73,17 +73,17 @@ A build writes one package to `--out`:
 hpn-ssh_<upstream>+sphynx<version>-1~<series>1_<arch>.deb
 ```
 
-`<upstream>` comes from `version.h` in the source tree, for example `10.6p1+snapshot20261103+hpn18.12.0`. `<version>` is the sphynx version. The parts, in order, are the OpenSSH release, the date of the OpenSSH commit the tree is built on, the HPN-SSH release and the sphynx version. A package built before the snapshot date was added (up to sphynx 1.2.3, `10.6p1+hpn18.12.0+sphynx...`) sorts below this one, as `snapshot` comes after `hpn`, so `apt` and `dpkg` upgrade it.
+`<upstream>` comes from `version.h` in the source tree, for example `10.6p2+snapshot20261116+hpn18.12.0`. `<version>` is the sphynx version. The parts, in order, are the OpenSSH release, the date of the OpenSSH commit the tree is built on, the HPN-SSH release and the sphynx version. A package built before the snapshot date was added (up to sphynx 1.2.3, `10.6p1+hpn18.12.0+sphynx...`) sorts below this one, as `snapshot` comes after `hpn`, so `apt` and `dpkg` upgrade it.
 
 ## Versions
 
 The version string has four parts:
 
 ```
-OpenSSH_10.6p1_snapshot20261103_hpn18.12.0_sphynx<version>
+OpenSSH_10.6p2_snapshot20261116_hpn18.12.0_sphynx<version>
 ```
 
-- `OpenSSH_10.6p1` is the OpenSSH release the base is after, in `sphynx-ssh/version.h`.
+- `OpenSSH_10.6p2` is the OpenSSH release the base is after, in `sphynx-ssh/version.h`.
 - `_snapshot20261103` is the date of the OpenSSH commit `sphynx-ssh/` is built on (`patches/BASE`). It is `SSH_SNAPSHOT` in `version.h`, and is the commit date of the base, so it changes when the base moves. OpenSSH master is ahead of 10.6 by many commits, so 10.6 alone would not say what the code is.
 - `_hpn18.12.0` is the HPN-SSH release.
 - `_sphynx<version>` is the sphynx version. It is `SSH_SPHYNX` in `sphynx-ssh/version.h`.
@@ -752,7 +752,7 @@ The two ciphers it compares come in both orders in the output:
 The series applies to this commit of OpenSSH, which is also in `patches/BASE`:
 
 ```
-3c6ec4c63  openssh/openssh-portable master, 2026-11-05 (OpenSSH 10.6 and the commits after it)
+e651bed9f  openssh/openssh-portable master, 2026-11-16 (OpenSSH 10.6p2 and the commits after it)
 ```
 
 Patch 0000 adds HPN-SSH 18.12.0 (rapier1/hpn-ssh `2c7cc5554`) to it. It is the result of merging HPN-SSH into OpenSSH master, so `sphynx-ssh/` has OpenSSH's newest fixes as well as HPN-SSH's performance work; HPN-SSH is only released for OpenSSH's major versions. The patches after it are sphynx's own changes.

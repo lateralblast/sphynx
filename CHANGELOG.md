@@ -4,6 +4,16 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-11-17
+
+### Changed
+
+- `sphynx-ssh/` is rebased onto OpenSSH master of 2026-11-16 (`e651bed9f`, OpenSSH 10.6p2), 14 commits past the previous base. `patches/BASE` is updated. The series applies to it unchanged apart from three conflicts in patch 0000 (`version.h`, `.depend`, and a CI workflow that patch 0018 removes) and the `p1` to `p2` line in patch 0017. The release string is now `OpenSSH_10.6p2_snapshot20261116_hpn18.12.0_sphynx1.2.5`.
+
+### Fixed
+
+- Takes OpenSSH's fixes for a password authentication bypass in some configurations (`auth-passwd.c`, `xcrypt.c`, `port-uw.c`: an account with no salt can no longer pass password authentication), and for the number of keyboard-interactive devices accepted (`auth2-chall.c`).
+
 ## [1.2.4] - 2026-11-05
 
 ### Changed
