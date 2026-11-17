@@ -4,6 +4,18 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.2.8] - 2026-11-17
+
+### Fixed
+
+- `tests/run-tests.sh` no longer skips the patch-series check when `sphynx-ssh/` lacks the base commit. It fetches the commit from `openssh-portable/` when that is checked out next to it, and otherwise fails with the `git -C sphynx-ssh fetch ...` command to run, so the check cannot be silently missed.
+
+## [1.2.7] - 2026-11-17
+
+### Fixed
+
+- OpenSSH's `regress/multiplex.sh` failed at `cmd conninfo compression`: it expected `compression zlib`, but with `Compression yes` both ends now negotiate `huff0@hpnssh.org` (patch 0022). The new patch 0070 makes the test accept either name; the rest of the `regress/` suite already passed.
+
 ## [1.2.6] - 2026-11-17
 
 ### Fixed

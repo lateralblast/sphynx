@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Richard Spindler <richard@lateralblast.com.au>
+Date: Tue, 17 Nov 2026 12:43:40 +1100
+Subject: [PATCH] regress: accept huff0 in the multiplex conninfo compression
+ test
+
+Fork-specific. With Compression yes both ends negotiate huff0@hpnssh.org,
+not zlib, so "ssh -O conninfo" reports "compression huff0@hpnssh.org" and
+regress/multiplex.sh failed at "cmd conninfo compression". The test now
+accepts either name.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ regress/multiplex.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/regress/multiplex.sh b/regress/multiplex.sh
+index e23f7d2b3..3e3bf049f 100644
+--- a/regress/multiplex.sh
++++ b/regress/multiplex.sh
+@@ -222,7 +222,7 @@ else
+ fi
+ if [ "$compression" = "yes" ]; then
+ 	verbose "test $tid: cmd conninfo compression"
+-	if echo "$conninfo" | grep "compression zlib" >/dev/null &&
++	if echo "$conninfo" | grep -E "compression (zlib|huff0@hpnssh.org)" >/dev/null &&
+ 	    echo "$conninfo" | grep "compressed" >/dev/null; then
+ 		trace "ok conninfo compression"
+ 	else

@@ -4,7 +4,7 @@
 
 SSH Performance Hacks Yielding Network eXcellence
 
-Version: 1.2.6
+Version: 1.2.8
 
 Sphynx is a wrapper that builds HPN-SSH from source and packages it for target operating systems. The first target is Ubuntu (`.deb`).
 
@@ -778,7 +778,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0014 | `scp`: check the hash field length and make `calculate_hash` fixed width. | 0.2.9 | yes |
 | 0015 | `scp`: release per-file resume state at the top of the loop. | 0.3.0 | yes |
 | 0016 | `channels`: arm the input fd only when it can be read. Fixes the client and server spinning at full CPU on long paths. | 0.3.4 | yes |
-| 0017 | `version`: add the sphynx version, and the date of the OpenSSH commit it is built on, to the release string. | 0.0.3, 1.2.4 | fork only |
+| 0017 | `version`: add the sphynx version, and the date of the OpenSSH commit it is built on, to the release string. | 0.0.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8 | fork only |
 | 0018 | `ci`: remove the inherited OpenSSH workflows and note the fork in the README. | 0.1.3 to 0.1.9 | fork only |
 | 0019 | `cipher-ctr-mt`: XOR the keystream a queue at a time, 4 to 7 percent faster `aes256-ctr` on loopback. | 0.4.5 | self-contained |
 | 0020 | `cipher-ctr-mt-provider`: read the cipher state through the `EVP_CIPHER_CTX`, which fixes a crash with OpenSSL 4.1. | 0.5.3 | self-contained |
@@ -831,6 +831,7 @@ Apply the patches in order. Each one builds on its own, and each message says wh
 | 0067 | ssh: add -Q addressfamily | 1.1.8 | dropped in 1.2.2, it is in OpenSSH now |
 | 0068 | readconf: keep the fields of the %C hash apart | 1.1.9 | dropped in 1.2.2, it is in OpenSSH now |
 | 0069 | ssh: give the FallbackPort attempt a full ConnectTimeout | 1.2.3 | yes |
+| 0070 | `regress`: accept `huff0@hpnssh.org` in the `multiplex.sh` conninfo compression test. Fork-specific. | 1.2.7 | fork only |
 
 Patches 0042 and 0057 to 0068 are no longer in the series: OpenSSH master has those fixes now, so they are in patch 0000's base. The `TCPKeepAlive` table (0042), the channel window excess (0057) and ten more that were taken from OpenSSH one at a time (0058 to 0068) are listed above for the record, and their `CHANGELOG.md` entries stay.
 
@@ -863,7 +864,7 @@ git am --3way $(ls ../patches/*.patch | grep -v /0000-)
 
 A patch that fails with "does not apply" and no conflict may be one that OpenSSH or HPN-SSH has since made; check, drop it, and say so in `CHANGELOG.md`. Write the series out again with `git format-patch`, keeping the numbers the patches have, and put the OpenSSH commit in `patches/BASE`. Patch 0017 holds the sphynx version tag, so regenerate it, and the series, whenever the sphynx version changes.
 
-`tools/patches.sh check` needs the OpenSSH commit in `sphynx-ssh/`'s own repository: `git -C sphynx-ssh fetch ../openssh-portable <commit>`.
+`tools/patches.sh check` needs the OpenSSH commit in `sphynx-ssh/`'s own repository: `git -C sphynx-ssh fetch ../openssh-portable <commit>`. `tests/run-tests.sh` does this by itself when `openssh-portable/` is checked out next to it, and fails (it no longer skips) when the commit is still missing.
 
 ### Sending a patch upstream
 

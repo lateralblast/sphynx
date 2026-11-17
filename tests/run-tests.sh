@@ -206,7 +206,10 @@ pass "tools/suggest-cipher.sh picks AES-GCM or ChaCha from the measured speeds o
 # --- patches ---------------------------------------------------------------
 
 base="$(tools/patches.sh base)"
-if git -C sphynx-ssh cat-file -e "$base^{commit}" 2>/dev/null; then
+have_base() { git -C sphynx-ssh cat-file -e "$base^{commit}" 2>/dev/null; }
+# the check needs the base commit in sphynx-ssh's git; take it from the openssh-portable checkout if it is there
+have_base || [ ! -e openssh-portable/.git ] || git -C sphynx-ssh fetch -q ../openssh-portable "$base" 2>/dev/null || true
+if have_base; then
     if out="$(tools/patches.sh check 2>&1)"; then
         pass "patches/ applies to upstream and reproduces sphynx-ssh ($(find patches -name '*.patch' | wc -l) patches)"
     else
@@ -214,7 +217,7 @@ if git -C sphynx-ssh cat-file -e "$base^{commit}" 2>/dev/null; then
         fail "patches/ does not reproduce sphynx-ssh; regenerate it (see Patches in the README)"
     fi
 else
-    echo "skip - sphynx-ssh does not have the upstream commit $base, so the patch series cannot be checked"
+    fail "sphynx-ssh does not have the upstream commit $base, so the patch series cannot be checked; run: git -C sphynx-ssh fetch <openssh-portable checkout> $base"
 fi
 
 # --- end-to-end build -----------------------------------------------------
