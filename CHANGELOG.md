@@ -8,7 +8,7 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ### Changed
 
-- `sphynx-ssh/` is rebased onto OpenSSH master of 2026-11-16 (`e651bed9f`, OpenSSH 10.6p2), 14 commits past the previous base. `patches/BASE` is updated. The series applies to it unchanged apart from three conflicts in patch 0000 (`version.h`, `.depend`, and a CI workflow that patch 0018 removes) and the `p1` to `p2` line in patch 0017. The release string is now `OpenSSH_10.6p2_snapshot20261116_hpn18.12.0_sphynx1.2.5`.
+- `sphynx-ssh/` is rebased onto OpenSSH master of 2026-11-16 (`e651bed9f`, OpenSSH 10.6p2), 14 commits past the previous base. `patches/BASE` is updated. The series applies to it unchanged apart from three conflicts in patch 0000 (`version.h`, `.depend`, and a CI workflow that patch 0018 removes) and the `p1` to `p2` line in patch 0017. Patch 0000 also carries OpenSSH's `.depend` update (`packet.o` on `utf8.h`, and added headers for five other objects). The release string is now `OpenSSH_10.6p2_snapshot20261116_hpn18.12.0_sphynx1.2.5`.
 
 ### Fixed
 
