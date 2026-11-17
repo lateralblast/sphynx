@@ -4,6 +4,12 @@ All notable changes to sphynx are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-17
+
+### Fixed
+
+- The `CI VM` workflow in `sphynx-ssh/` was rejected by GitHub as invalid and ran no jobs: after the move to OpenSSH master it had `permissions` twice (OpenSSH's own `read-all` and the `contents: read` block patch 0018 added). Patch 0018 no longer adds the block to `.github/workflows/vm.yml`.
+
 ## [1.2.9] - 2026-11-17
 
 ### Changed

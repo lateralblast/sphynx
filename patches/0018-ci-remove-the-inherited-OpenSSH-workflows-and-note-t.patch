@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Richard Spindler <richard@lateralblast.com.au>
 Date: Tue, 3 Nov 2026 18:20:19 +1100
-Subject: [PATCH 18/55] ci: remove the inherited OpenSSH workflows and note the
- fork in the README
+Subject: [PATCH] ci: remove the inherited OpenSSH workflows and note the fork
+ in the README
 
 Fork-specific, not for upstream. Remove the workflows that only run for
 openssh/* repositories (selfhosted.yml, upstream.yml), that need a secret or
@@ -22,9 +22,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  .github/workflows/github-repo-stats.yml |  19 ---
  .github/workflows/selfhosted.yml        | 212 ------------------------
  .github/workflows/upstream.yml          |  89 ----------
- .github/workflows/vm.yml                |  35 ++--
+ .github/workflows/vm.yml                |  32 ++--
  README.md                               |   8 +
- 8 files changed, 36 insertions(+), 410 deletions(-)
+ 8 files changed, 33 insertions(+), 410 deletions(-)
  delete mode 100644 .github/ci-status.md
  delete mode 100644 .github/workflows/cifuzz.yml
  delete mode 100644 .github/workflows/github-repo-stats.yml
@@ -505,20 +505,10 @@ index d40b509fd..000000000
 -      run: vmshutdown
 -      working-directory: ${{ runner.temp }}
 diff --git a/.github/workflows/vm.yml b/.github/workflows/vm.yml
-index 1dfcfbcc3..04ded566d 100644
+index bf1556737..99e259ae4 100644
 --- a/.github/workflows/vm.yml
 +++ b/.github/workflows/vm.yml
-@@ -11,6 +11,9 @@ on:
-   pull_request:
-     paths: [ '**.c', '**.h', '**.m4', '**.sh', '**/Makefile.in', 'configure.ac', 'regress/Makefile', '.github/configs', '.github/workflows/vm.yml' ]
- 
-+permissions:
-+  contents: read
-+
- jobs:
-   dragonflybsd:
-     name: "dragonflybsd-${{ matrix.target }}"
-@@ -23,12 +26,12 @@ jobs:
+@@ -24,12 +24,12 @@ jobs:
          config: [default]
      runs-on: ubuntu-latest
      steps:
@@ -533,7 +523,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          release: ${{ matrix.target }}
          usesh: true
-@@ -86,12 +89,12 @@ jobs:
+@@ -87,12 +87,12 @@ jobs:
          config: [default]
      runs-on: ubuntu-latest
      steps:
@@ -548,7 +538,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          release: ${{ matrix.target }}
          usesh: true
-@@ -168,12 +171,12 @@ jobs:
+@@ -166,12 +166,12 @@ jobs:
          config: [default]
      runs-on: ubuntu-latest
      steps:
@@ -563,7 +553,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          release: ${{ matrix.target }}
          usesh: true
-@@ -243,12 +246,12 @@ jobs:
+@@ -241,12 +241,12 @@ jobs:
          config: [default]
      runs-on: ubuntu-latest
      steps:
@@ -578,7 +568,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          release: ${{ matrix.target }}
          usesh: true
-@@ -300,12 +303,12 @@ jobs:
+@@ -298,12 +298,12 @@ jobs:
          config: [default]
      runs-on: ubuntu-latest
      steps:
@@ -593,7 +583,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          release: ${{ matrix.target }}
          usesh: true
-@@ -349,7 +352,7 @@ jobs:
+@@ -347,7 +347,7 @@ jobs:
      runs-on: ubuntu-latest
      steps:
      - name: start OpenBSD VM
@@ -602,7 +592,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          copyback: false
          nat: |
-@@ -371,7 +374,7 @@ jobs:
+@@ -369,7 +369,7 @@ jobs:
          echo "SNAPSHOT_VERSION=${ver}" >> $GITHUB_ENV
      - name: check for cached sysupgrade
        id: cache-sysupgrade
@@ -611,7 +601,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          key: openbsd-sysupgrade ${{ env.SNAPSHOT_VERSION }}
          path: /tmp/_sysupgrade/
-@@ -391,7 +394,7 @@ jobs:
+@@ -389,7 +389,7 @@ jobs:
          rsync -av openbsd:/home/_sysupgrade/ /tmp/_sysupgrade/
      - name: save sysupgrade to cache
        if: steps.cache-sysupgrade.outputs.cache-hit != 'true'
@@ -620,7 +610,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          key: openbsd-sysupgrade ${{ env.SNAPSHOT_VERSION }}
          path: /tmp/_sysupgrade/
-@@ -431,7 +434,7 @@ jobs:
+@@ -429,7 +429,7 @@ jobs:
          for i in regress-logs/failed*.log; do echo ===; echo LOGFILE: $i; echo ===; cat $i; echo; done
      - name: save logs
        if: failure()
@@ -629,7 +619,7 @@ index 1dfcfbcc3..04ded566d 100644
        with:
          name: openbsd-current-upstream-logs
          path: regress-logs/*.log
-@@ -449,12 +452,12 @@ jobs:
+@@ -447,12 +447,12 @@ jobs:
          config: [default]
      runs-on: ubuntu-latest
      steps:
@@ -660,5 +650,3 @@ index 9e99d0a48..9d3c84513 100644
  # HPNSSH: Based on Portable OpenSSH
  HPN-SSH is a high performance soft fork of OpenSSH that can provide significantly faster throughput for bulk data transfers over a wide range of network paths. In some situations we've seen throughput rates more than 100 times faster than OpenSSH. HPN-SSH is able to do this by optimizing the application layer receive buffer to match the TCP receive buffer. Notably, to see performance improvements HPN-SSH only needs to be the data receiver so users can see notable improvements with many other SSH implementations. HPN-SSH also incorporates two parallelized ciphers, AES-CTR and Chacha20 (the default). When using these ciphers a throughput performance increase of 30% is typical. More information on how we do this work and other features of HPN-SSH is available from [https://hpnssh.org](https://hpnssh.org).
  
--- 
-2.50.0
